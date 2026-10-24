@@ -9,10 +9,10 @@ patterns, arrange them into a song, and bounce the result to WAV. Patches are sa
 in the browser, exported as JSON, or **shared as a self-contained URL**: the whole rack
 is compressed into the link's `#hash`, so no server is ever involved.
 
-> **Status note:** this README documents the code as it stands in `index.html`. A
-> review found several functional bugs, including silent noise sources, share links
-> that drop sequencer patterns, and an HTML-injection path. See
-> [§ 14 Known issues](#14-known-issues) before relying on those features.
+> **Status note:** a code review found 4 critical, 4 high and 10 medium issues. All
+> of them are fixed in this revision and were re-verified in headless Chromium. See
+> [§ 14 Changelog & known issues](#14-changelog--known-issues) for what changed and
+> for the remaining low-severity items.
 
 ---
 
@@ -31,7 +31,7 @@ is compressed into the link's `#hash`, so no server is ever involved.
 11. [Built-in patches](#11-built-in-patches)
 12. [Architecture (developer guide)](#12-architecture-developer-guide)
 13. [Function reference](#13-function-reference)
-14. [Known issues](#14-known-issues)
+14. [Changelog & known issues](#14-changelog--known-issues)
 
 ---
 
@@ -255,15 +255,21 @@ Legend for the parameter tables:
 
 ### 5.1 OSC — multi-wave oscillator (`osc`)
 
-A free-running oscillator with sub-oscillator, pulse-width shaping, two noise colours,
-four additive wavetables and slow analogue-style drift.
+A free-running oscillator with linear FM input, sub-oscillator, pulse-width shaping,
+two noise colours, four additive wavetables and slow analogue-style drift.
 
-* **Inputs:** `Trig` (trig). *Currently broken, see issue C2.*
+* **Inputs:** `FM` (sig). Any signal patched here is multiplied by **FM Amt** (in Hz)
+  and added to the oscillator frequency: linear, through-zero-capable FM. Patch
+  another OSC here for classic FM tones. For vibrato or exponential FM, patch onto the
+  **Pitch** knob instead.
 * **Outputs:** `Out` (sig)
 
-Signal flow: `osc → (wave crossfade) ┬ sub ┬ white ┬ pink → Level → Out`. *Pulse* is
-a sawtooth plus a DC offset pushed through a hard `tanh` shaper, so moving the offset
-(PW) moves the duty cycle.
+Signal flow: `FM in → FM Amt → osc.frequency`; `osc → (wave crossfade) ┬ sub ┬ white
+┬ pink → Level → Out`. *Pulse* is a sawtooth plus a DC offset pushed through a hard
+`tanh` shaper, so moving the offset (PW) moves the duty cycle.
+
+> Older versions had a non-functional `Trig` input here. Patches that used it load
+> without that cable.
 
 | Knob | Range | Default | Curve | Mod | Scale | Notes |
 |---|---|---|---|---|---|---|
@@ -273,13 +279,14 @@ a sawtooth plus a DC offset pushed through a hard `tanh` shaper, so moving the o
 | PW | −0.92…+0.92 | 0 | lin | audio | 0.9 | Pulse width; only audible with *pulse*. |
 | Sub | 0…1 | 0 | pow2 | audio | 1 | Square sub-oscillator level. |
 | SubOct | 1…2 | 1 | lin, step 1 | – | – | Sub sits 1 or 2 octaves down. |
-| FM Amt | 0…4000 Hz | 0 | pow3 | audio | 2000 | Linear-FM depth. **No FM input exists, so this does nothing (issue H4).** |
+| FM Amt | 0…4000 Hz | 0 | pow3 | audio | 2000 | Depth of the `FM` input, in Hz of deviation per unit of signal. |
 | Drift | 0…1 | 0.08 | lin | – | – | Random detune (up to ±34 ¢), re-targeted every scheduler tick. |
 | Level | 0…1.2 | 0.5 | pow2 | audio | 1 | Output level. |
 
 **Wave:** `sine, triangle, saw, square, pulse, organ, glass, vocal, digi, white, pink`.
 `organ/glass/vocal/digi` are `PeriodicWave`s defined in `initTables()`. `white/pink`
-are looping 3-second noise buffers (**currently silent, issue C1**).
+are looping 3-second noise buffers: uniform white noise, and pink noise from Paul
+Kellet's filter. Both are normalised to a 0.95 peak.
 
 Visual: a zero-crossing-triggered mini scope.
 
@@ -365,8 +372,7 @@ Engine recipes:
 * **cowbell:** two squares at a 1:1.48 ratio.
 * **zap:** a long downward sweep.
 
-The **trigger** pad fires a manual hit. (Noise-based parts are currently silent; see
-issue C1. **clap** is entirely noise-based and therefore produces no sound.)
+The **trigger** pad fires a manual hit.
 
 ### 5.5 FILTER — multimode 12/24 dB filter with drive (`filter`)
 
@@ -406,15 +412,20 @@ waveform.
 
 ### 5.7 ECHO — ping-pong delay (`echo`)
 
-Two 4-second delay lines with cross-feedback through HP → LP filters, panned hard
-L/R. An internal LFO ("wobble") modulates both delay times for tape flutter/chorus.
+Two 4-second delay lines with cross-feedback through HP → LP filters and a soft
+saturator, panned hard L/R. An internal LFO ("wobble") modulates both delay times for
+tape flutter/chorus.
+
+The saturator is unity gain for normal levels and limits the loop to about ±1.5. With
+**Fb** above 1.0 the echo therefore self-oscillates at a bounded level, like a tape
+echo driven into runaway.
 
 | Control | Range | Default | Mod | Notes |
 |---|---|---|---|---|
 | Sync | free, 16/1 … 1/32 (incl. triplets) | 1/8 | – | Tempo-synced delay time. Capped at 3.9 s. |
 | Time | 5 ms…2 s (exp) | 0.3 s | ctrl, 0.5 | Only used when Sync = free. |
 | R ratio | 0.25…2 | 1 | ctrl, 0.75 | Right delay = left × ratio. |
-| Fb | 0…1.15 | 0.45 | audio, 0.5 | Feedback. **Above 1.0 it self-oscillates and grows without bound (issue M6).** |
+| Fb | 0…1.15 | 0.45 | audio, 0.5 | Feedback. Above 1.0 = bounded self-oscillation. 🎲 only picks 0…0.85. |
 | Tone | 300 Hz…18 kHz | 5200 | audio → `detune`, 3600 ¢ | Feedback low-pass. |
 | HP | 20 Hz…2 kHz | 120 | audio → `detune`, 2400 ¢ | Feedback high-pass. |
 | Wobble | 0…1 | 0 | audio, 0.01 | Flutter depth (up to 4 ms). |
@@ -425,15 +436,20 @@ L/R. An internal LFO ("wobble") modulates both delay times for tape flutter/chor
 ### 5.8 REVERB — generated convolution reverb (`rev`)
 
 A `ConvolverNode` whose stereo impulse response is synthesised in JS: filtered noise,
-a power-law decay and sparse early reflections, normalised. Changes to Size, Decay,
-Damp and Diffuse rebuild the IR after a 140 ms debounce.
+a power-law decay and sparse early reflections, normalised.
+
+Changes to Size, Decay, Damp and Diffuse (including modulation) rebuild the IR. The
+rebuild is **throttled** to at most one per 140 ms and skipped when the change is
+inaudibly small. Modulating these knobs therefore gives stepped, grainy changes to the
+room (each rebuild also re-rolls the noise), not smooth sweeps. For smooth motion,
+modulate PreDly, LowCut, HiCut or Mix.
 
 | Knob | Range | Default | Mod | Notes |
 |---|---|---|---|---|
-| Size | 0.15…8 s | 2.2 | ctrl (**ineffective, issue M2**) | IR length. |
-| Decay | 0…1 | 0.4 | ctrl (ineffective) | Decay curve exponent. |
-| Damp | 0…1 | 0.45 | ctrl (ineffective) | High-frequency damping over time. |
-| Diffuse | 0…1 | 0.3 | ctrl (ineffective) | Early-reflection strength. |
+| Size | 0.15…8 s | 2.2 | ctrl (stepped) | IR length. |
+| Decay | 0…1 | 0.4 | ctrl (stepped) | Decay curve exponent. |
+| Damp | 0…1 | 0.45 | ctrl (stepped) | High-frequency damping over time. |
+| Diffuse | 0…1 | 0.3 | ctrl (stepped) | Early-reflection strength. |
 | PreDly | 0…0.25 s | 0.015 | audio, 0.1 | |
 | LowCut | 20 Hz…1.2 kHz | 120 | audio → `detune`, 2400 ¢ | Pre-convolution HP. |
 | HiCut | 800 Hz…19 kHz | 9000 | audio → `detune`, 3600 ¢ | Pre-convolution LP. |
@@ -448,7 +464,7 @@ Release, then multiplied by **Depth** and offset by **Bias**. The output is an
 ordinary signal, so it can modulate knobs or be listened to as audio. It is always
 tapped, so its live level is available.
 
-* **Inputs:** `Trig` (trig). A timed event (`dur` given) releases after `dur`. A held event (`dur = null`) should release on note-off, **but ENV has no release handler (issue C3).**
+* **Inputs:** `Trig` (trig). A timed event (`dur` given, e.g. SEQ) releases after `dur`. A held event (`dur = null`, from KEYS, MIDI or the piano) sustains until the note-off.
 * **Outputs:** `Env` (sig)
 
 | Control | Range | Default | Mod |
@@ -468,7 +484,8 @@ tapped, so its live level is available.
 * Stage times are read at trigger time (modulation included).
 * Every trigger restarts from 0.
 * **Vel** sets velocity sensitivity: `peak = 1 − vel + vel × velocity`.
-* **Loop** re-fires the envelope free-running with period `dly+a+hold+d+r`.
+* **Loop** re-fires the envelope free-running with period `dly+a+hold+d+r`. Every
+  cycle plays the full shape, including the release.
 * The **gate** pad behaves like a held key: press = attack, release = release.
 
 ### 5.10 LFO — low-frequency oscillator / random source (`lfo`)
@@ -479,7 +496,7 @@ tapped, so its live level is available.
 | Control | Range | Default | Mod | Notes |
 |---|---|---|---|---|
 | Wave | sine, triangle, saw, square, s&h, random, drift | sine | – | First four use an `OscillatorNode`. `s&h` = stepped random values; `random` = linear ramps between them; `drift` = smooth exponential glide. |
-| Sync | free, 16/1 … 1/32 | free | – | Rate from the tempo (cycle = division length). |
+| Sync | free, 16/1 … 1/32 | free | – | Rate from the tempo (cycle = division length). Synced LFOs follow BPM changes and are **phase-locked to the transport**: on play/seek/loop the oscillator restarts at the phase the song position implies, so a 1/1 LFO always begins its cycle on the downbeat. |
 | Rate | 0.002…200 Hz (exp) | 2 Hz | audio → `detune`, 4800 ¢ (periodic waves); ctrl (random waves) | Displayed as a period in seconds below 1 Hz. Audio-rate up to 200 Hz. |
 | Depth | −1…+1 | 1 | audio | |
 | Bias | −1…+1 | 0 | audio | |
@@ -542,13 +559,18 @@ Every audible patch needs at least one OUT. Chain:
 |---|---|---|---|
 | Level | 0…1.5 | 0.8 | audio |
 | Pan | −1…+1 | 0 | audio |
-| Limiter | toggle | on | – (compressor: −6 dB threshold, 14:1) |
+| Limiter | toggle | on | – (compressor −6 dB/14:1, then a brick-wall soft clipper at ±0.99) |
 
 `Thru` outputs the post-pan, **pre-limiter** signal (handy for a SCOPE). The visual is
 a peak meter with a clip flag.
 
 **Master bus** (global): `bus gain (master slider, 0.72 default) → 12 Hz DC-blocking
-high-pass → compressor (−4 dB, 12:1, 3 ms attack) → analyser/meter → speakers`.
+high-pass → compressor (−4 dB, 12:1, 3 ms attack) → soft clipper → analyser/meter →
+speakers`.
+
+The soft clipper (`mkSoftClip`) is linear below 0.8 and has a smooth `tanh` knee
+above that, so the output **never exceeds ±0.99**: live, recorded and bounced audio
+cannot clip. The compressors add a few ms of lookahead latency (about 6 ms each).
 
 ---
 
@@ -748,13 +770,16 @@ The packed JSON is compact:
 ```
 
 SEQ patterns use a columnar codec: `on`/`slide` as 32-bit masks, notes as a base-36
-string, and other lanes only when they differ from the defaults. *(A version mismatch
-currently breaks this codec, so patterns are lost; see issue C4.)*
+string, and other lanes only when they differ from the defaults.
 
 * Because the fragment never reaches a server, the patch is never uploaded anywhere.
 * On first load, a link adds **⇩ Open shared patch** to the splash. Pasting a link
   into an already-open tab loads it immediately as an undoable step.
-* Safety limits: 2 MB decompressed, 200 modules, 2000 cables.
+* Links are treated as hostile input:
+  * safety limits of 2 MB decompressed, 200 modules and 2000 cables;
+  * unknown module types (including prototype names like `constructor`) are skipped;
+  * values are validated;
+  * a load that fails part-way is rolled back, so your current rack is never lost.
 * Links longer than 8000 characters trigger a warning, because some apps truncate them.
 * In the console, `await SHARE.report()` shows what each part of the patch costs in bytes.
 
@@ -781,7 +806,7 @@ in a text file.
 
 | Field | Meaning |
 |---|---|
-| length (bars) | Defaults to the song length. 1–512 bars; the total is capped at 600 s. |
+| length (bars) | Defaults to the song length. 1–512 bars; the total is capped at 10 minutes (the dialog reports when this happens). |
 | tail (seconds) | 0–30 s of extra render time for reverb/delay tails. |
 | format | 16-bit PCM, 24-bit PCM, or 32-bit float WAV. |
 | stems | Also render one stereo file per OUT module (up to 15), zipped with the master. |
@@ -795,8 +820,19 @@ How it works:
 4. The offline context is suspended every 1024 frames, so that control-rate
    modulation and the event scheduler run exactly as they would live.
 
-If song mode is on, the arrangement is used; looping is disabled offline. The ZIP
-writer is a built-in store-only implementation.
+Further details:
+
+* If song mode is on, the arrangement is used; looping is disabled offline.
+* The render starts at exactly t = 0: there is no 80 ms live lead-in, so the first
+  downbeat lands at the start of the file (after the compressors' few-ms lookahead).
+* The master file uses the current **master** slider level, and goes through the same
+  soft clipper as the live output.
+* Renders are limited to **10 minutes**. If the requested length is longer, the
+  dialog and a toast say so ("capped at 10:00").
+* Stems are taken from each OUT module *after* its Level/Pan, but *before* its limiter
+  and the master bus. They are raw material for mixing, so they will not sum exactly
+  to the master.
+* The ZIP writer is a built-in store-only implementation.
 
 ---
 
@@ -897,7 +933,8 @@ Optional hooks a module sets:
 | `m.locate(beat, time)` | transport play/seek/loop | phase-lock |
 | `m.reset(time)` | legacy fallback for `locate` | |
 | `m.onStop(rewind)` | transport stop | (no module implements it yet) |
-| `m.setT()` | tempo change | recompute tempo-synced times |
+| `m.setT()` | tempo change | recompute tempo-synced times (ECHO, LFO) |
+| `m.free()` | `removeModule` | per-instance teardown (LFO oscillator, KEYS held notes, REVERB timer) |
 | `m.trigNow(t, vel, dur)` | – | manual trigger convenience |
 
 Optional `def` hooks:
@@ -907,7 +944,7 @@ Optional `def` hooks:
 | `save(m)` / `load(m, s)` | persistent state (patch files, clipboard) |
 | `snap(m)` | undo-relevant subset of the state (falls back to `save`) |
 | `pack(m)` / `unpack(p)` | compact share-link codec |
-| `free(m)` | custom teardown |
+| `free(m)` | per-*type* teardown. Never assign `m.def.free` from inside `build()`: `def` is shared by every instance. Use `m.free` instead. |
 
 ### Parameter definitions
 
@@ -917,6 +954,7 @@ Optional `def` hooks:
   opts?,                    // selects
   cents?: true,             // modulation is exponential (base · 2^(cv·scale/1200))
   nornd?: true,             // excluded from 🎲
+  rnd?: [lo, hi],           // safe range for 🎲, in parameter units (e.g. echo feedback)
   mod?: { targets?: [AudioParam…], scale },   // omit = not modulatable
   modMap?: (base, sum) => value,             // custom modulation mapper
   set: v => { … } }         // push the value into the audio graph
@@ -929,8 +967,11 @@ Optional `def` hooks:
   note number, or `undefined`.
 * `onRel(t, note)` ends a held note.
 * Sources: SEQ Gate (timed); KEYS Gate/Notes (held).
-* Receivers: ENV, POLY, DRUM (ignores note and duration), LFO Retrig, SEQ Reset.
-* Helpers: `fireTrig(jack, …)` and `fireRel(jack, …)` walk `jack.conns`.
+* Receivers: ENV (hold/release), POLY (voice allocation), DRUM (ignores note and
+  duration), LFO Retrig, SEQ Reset.
+* Helpers: `fireTrig(jack, …)` and `fireRel(jack, …)` walk `jack.conns`. An exception
+  in one receiver is logged and skipped, so it can never stall the sender (e.g. freeze
+  a sequencer).
 
 ### Undo/redo
 
@@ -949,12 +990,14 @@ Recorders: `recAddModule`, `recRemoveModule`, `recCable`, `recAmount`, `recParam
 
 ### Rendering and timing
 
-* **Audio events:** a `setInterval(22 ms)` loop calls `m.sched(t, t+0.12)` on every
-  module and handles seamless loop wrapping (`loopCrossing`/`wrapLoop`).
-* **Visuals and control-rate modulation:** the `requestAnimationFrame` loop (capped at
-  ~66 fps) reads the taps, applies control-rate params, draws only on-screen modules,
-  re-lays cables when `wiresDirty`, and updates the meter, position readout and song
-  panel.
+* **Audio events and control-rate modulation:** a `setInterval(22 ms)` loop runs
+  `pumpControl()` (read taps, apply control-rate params), calls `m.sched(t, t+0.12)`
+  on every module, and handles seamless loop wrapping (`loopCrossing`/`wrapLoop`).
+  Because this loop is a timer, modulation keeps working in background tabs, where
+  rAF is paused.
+* **Visuals:** the `requestAnimationFrame` loop (capped at ~66 fps) also refreshes the
+  taps for smooth knob rings, draws only on-screen modules, re-lays cables when
+  `wiresDirty`, and updates the meter, position readout and song panel.
 
 ### Adding a module
 
@@ -967,6 +1010,8 @@ Recorders: `recAddModule`, `recRemoveModule`, `recCable`, `recAmount`, `recParam
 3. If it has non-parameter state, add `save`/`load` (and `pack`/`unpack` for compact
    share links).
 4. Add the key to `ORDER` (§ 12) so it appears in the palette.
+5. Never put patch/file data into markup: use `ht()` (text) or `esc()`; `h()`'s third
+   argument is parsed as HTML.
 
 ---
 
@@ -978,19 +1023,22 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 | Function | Description |
 |---|---|
-| `h(tag, cls, html)` | Create an element; `html` is assigned via **innerHTML**. |
+| `h(tag, cls, html)` | Create an element; `html` is assigned via **innerHTML**. Only for markup written in this file. |
+| `ht(tag, cls, text)` | Create an element with plain **text** content (safe for names from files/links). |
+| `esc(v)` | HTML-escape a value for template strings. |
 | `$(sel)` | `document.querySelector`. |
 | `clamp(v, a, b)`, `lerp(a, b, t)` | Maths. |
 | `rnd(max=1, min=0)` | Random float in [min, max). Note the reversed argument order. |
-| `toast(text)` | Transient status message (innerHTML). |
+| `toast(text)` | Transient status message (plain text). |
 
 ### § 2 Engine
 
 | Function | Description |
 |---|---|
 | `createEngine(ac)` | Build an engine around a (possibly offline) context: master chain, `setAP`, `cah`, transport and async `init`. |
+| `mkSoftClip(ac)` | Brick-wall soft clipper (`{input, output}`): linear below 0.8, `tanh` knee, ceiling ±0.99, 2× oversampled. Used on the master bus and in each OUT limiter. |
 | `engine.init({workletSrc})` | Resume the context; create noise buffers and wavetables; register the crusher worklet. |
-| `mkNoise(ac, pink)` | Create a 3 s mono noise buffer. **Body missing; returns silence (issue C1).** |
+| `mkNoise(ac, pink)` | Create a 3 s mono noise buffer: white (uniform) or pink (Paul Kellet filter), normalised to a 0.95 peak. |
 | `mkWave(ac, table, name, harmonics)` | Build a `PeriodicWave` from a cosine harmonic list. |
 | `initTables(ac, table)` | Define the `organ`, `glass`, `vocal` and `digi` wavetables. |
 | `setPlay(p)` | Legacy play/stop wrapper (unused). |
@@ -1004,7 +1052,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `noteName(m)` | MIDI number → `"C4"`. |
 | `mtof(m)` | MIDI number → Hz (A4 = 440). |
 | `quantN(n, scale, root)` | Snap semitone `n` to the nearest scale degree relative to `root`. |
-| `createTransport(engine)` | Beat clock with `on/emit`, `beatSec`, `beatAt`, `timeAt`, `setTempo`, `play`, `stop`, `seek`, `setLoop`, `loopCrossing` and `wrapLoop`. Starts 80 ms ahead for clean scheduling. |
+| `createTransport(engine)` | Beat clock with `on/emit`, `beatSec`, `beatAt`, `timeAt`, `setTempo`, `play(fromBeat?, delay = 0.08)`, `stop`, `seek`, `setLoop`, `loopCrossing` and `wrapLoop`. Live playback starts 80 ms ahead for clean scheduling; offline renders pass `delay = 0`. |
 | `fmtPos(beat)` | Beat → `"003.2.4"`. |
 
 ### § 4 Parameters
@@ -1026,7 +1074,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `syncToTransport(m)` | Phase-lock a module added during playback. |
 | `wireTransport(engine)` | Subscribe the engine's transport events to its modules' hooks. |
 | `applyView()`, `s2w(x, y)` | Apply the pan/zoom transform; screen → scene coordinates. |
-| `history.*` | `record, begin, end, run, mute, replace, undo, redo, clear, onChange`, plus getters `active/canUndo/canRedo/undoLabel/redoLabel`. |
+| `history.*` | `record, begin, end, run, mute, replace, undo, redo, clear, onChange`, plus getters `active/canUndo/canRedo/undoLabel/redoLabel`. `replace()` is atomic: if the change throws, the previous rack is restored before the error propagates. |
 | `recAddModule`, `recRemoveModule`, `recCable`, `recAmount`, `recParam`, `recMove`, `recCollapse` | Command factories (called after the action). |
 | `editDepth(c, v, {merge})` | Set a cable depth and record it. |
 | `placeModule(m, x, y)` | The single writer of module position. |
@@ -1037,9 +1085,9 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 | Function | Description |
 |---|---|
-| `addModule(type, x, y, id?)` | Build the module, attach header behaviour, register it, sync it to the transport, and record undo. |
+| `addModule(type, x, y, id?)` | Build the module, attach header behaviour, register it, sync it to the transport, and record undo. If `build()` throws, the partial module is torn down and `null` is returned. |
 | `measure(m)` | Cache the rendered size. |
-| `removeModule(m)` / `removeModules(list)` | Full teardown (cables → snapshot → nodes → DOM) as one undo step. |
+| `removeModule(m)` / `removeModules(list)` | Full teardown (cables → snapshot → `m.free()` / `def.free(m)` → nodes → DOM) as one undo step. |
 | `select(m, mode)` / `selectMany(list, mode)` / `pruneSelection()` / `syncSelection()` / `selectedMods()` | Selection model (`selSet`, `selMod`). |
 | `beginModuleDrag(e, anchor, additive)` | Group move with a 3 px dead-zone; one undo step. |
 | `boundsOf(mods)` | Bounding box in scene units. |
@@ -1058,13 +1106,13 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `jackEl(j)`, `jackPos(o)`, `wpath(a, b)`, `drawWire(c)`, `layoutWires()` | Jack DOM and cable geometry. |
 | `selectConn(c)` | Select a cable. |
 | `startCable(e, jack)` | Interactive cable drag, including picking up an existing cable from an input. |
-| `fireTrig(jack, t, vel, dur, note)` / `fireRel(jack, t, note)` | Dispatch trigger events. |
+| `fireTrig(jack, t, vel, dur, note)` / `fireRel(jack, t, note)` | Dispatch trigger events; a throwing receiver is logged and skipped. |
 
 ### § 8–10 Inspector, navigation, clipboard, scheduler
 
 | Function | Description |
 |---|---|
-| `showInsp()` | Rebuild the bottom bar (innerHTML with module titles). |
+| `showInsp()` | Rebuild the bottom bar (titles and labels are escaped). |
 | `startMarquee(e)` | Rubber-band selection. |
 | `fitView()` | Zoom to fit every module (0.28×–1.3×). |
 | `isTextTarget(t)` | Is the event target an input/textarea/select/contentEditable? |
@@ -1074,6 +1122,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `readTaps()` | Average each tapped jack's analyser buffer into `jack.cv`. |
 | `pumpControl()` | `readTaps()` + apply all control-rate params. |
 | `pumpSched(t, ahead)` | Call every module's `sched` (errors are swallowed). |
+| scheduler interval | Every 22 ms: `pumpControl()` (so modulation keeps running in background tabs, where rAF stops), loop wrap, `pumpSched`, `songTick`. |
 
 ### § 11 Module definitions
 
@@ -1085,7 +1134,9 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `seqDefaultSteps()` | 32 default steps (every 4th step on). |
 | `seqPackSteps(S)` / `seqUnpackSteps(p)` | Columnar share codec for one pattern. |
-| `m.isDefaultBank`, `m.fillBank`, `m.resetBank`, `m.setBank`, `m.refreshUI`, `m.stepDur`, `m.locate`, `m.recNote` | Per-instance SEQ API. |
+| `m.isDefaultBank`, `m.fillBank`, `m.resetBank`, `m.setBank`, `m.refreshUI`, `m.stepDur`, `m.locate`, `m.recNote` | Per-instance SEQ API. Internally `drainQ()` advances the playhead queue from both `sched` and `draw`. |
+| LFO internals | `rateHz()`, `remake(t, phase)`, `phaseWave(wave, phase)` (phase-shifted PeriodicWave from the spec's Fourier series), `relock()`, `m.setT`, `m.locate`, `m.free`. |
+| REVERB internals | `buildIR()` (uses modulated values), `irKey()` (change detector), `queueIR()` (140 ms throttle). |
 | `m.noteOn(raw, vel)`, `m.noteOff(raw)`, `m.allOff()` | Per-instance KEYS API. |
 
 ### § 12–14 Palette, render loop, serialisation
@@ -1099,9 +1150,9 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `cableRef(c)`, `refKey(ref)`, `findConnByRef(ref)`, `connectRef(ref, lookup)` | Id-based cable references (survive module re-creation). |
 | `exportFragment(mods, {cables})` | Modules (+ internal cables) → fragment. |
 | `serialize()` | Whole rack + tempo + song → patch. |
-| `importFragment(frag, {keepIds, dx, dy, at})` | Fragment → live modules/cables; returns `{modules, conns, idMap, skipped}`. |
-| `restoreTitle(m, name)` | Restore a saved title and advance the per-type counter. |
-| `clearPatch()` | Remove all modules. |
+| `importFragment(frag, {keepIds, dx, dy, at})` | Fragment → live modules/cables; returns `{modules, conns, idMap, skipped}`. Ids are reused only if they look like `m<digits>`; each record's params/state are imported defensively. |
+| `restoreTitle(m, name)` | Restore a saved title (only `"<TYPE> <n>"` is accepted) and advance the per-type counter. |
+| `clearPatch()` | Remove all modules and reset the song. |
 | `loadPatchData(d)` | Raw load (clear, song, tempo, import). |
 | `deserialize(d)` | Undoable load plus fit view. |
 | `loadBuiltin(name)` | Undoable built-in load. |
@@ -1125,7 +1176,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `SHARE.decode(hash)` | Hash → patch object (size-capped). |
 | `SHARE.copy(text)` | Clipboard with fallbacks (execCommand, then prompt). |
 | `SHARE.report()` | Byte-cost table in the console. |
-| internal: `b64.enc/dec`, `deflate`, `inflate` (capped), `pack(opt)`, `packSong(idx)`, `unpack(json)`, `sig4` | Codec pieces. |
+| internal: `b64.enc/dec`, `deflate`, `inflate` (capped), `pack(opt)`, `packSong(idx)`, `unpack(json)`, `sig4` | Codec pieces. Links are written as `v: 2`. `unpack` detects packed vs saved state by shape, so links from the earlier (buggy) encoder still open with their patterns. |
 
 ### § 16–21
 
@@ -1141,7 +1192,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `songCommit(label, before)` / `songEdit(label, fn)` | Undoable song edits. |
 | `songUI.toggle()` / `songUI.tick()` | Arranger panel (internal: `fits`, `trimToLength`, `syncHead`, `clipEl`, `renderGrid`). |
 | `withHeadlessRack(engine, fn)` | Swap in a hidden rack bound to another engine, then restore. |
-| `renderOffline({bars, tail, stems, onProgress})` | Offline bounce → `{files:[{name, L, R}], sampleRate}`. |
+| `renderOffline({bars, tail, stems, onProgress})` | Offline bounce → `{files:[{name, L, R}], sampleRate, seconds, capped}`. |
 | `encodeWavPCM(L, R, sr, bits)` | 16/24-bit PCM or 32-bit float WAV. |
 | `makeZip(files)` | Store-only ZIP writer (CRC-32). |
 | `downloadBlob(blob, name)` | Trigger a download. |
@@ -1150,289 +1201,66 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 ---
 
-## 14. Known issues
-
-These come from a full read of the source. Items marked **✔ verified** were reproduced
-in headless Chromium 141.
-
-### Summary
-
-| # | Severity | Area | Issue |
-|---|---|---|---|
-| C1 | Critical | Engine | Noise buffers are empty: OSC white/pink, every DRUM noise layer and the whole **clap** engine are silent ✔ |
-| C2 | Critical | OSC | `Trig` input calls undefined `fire`/`rel`. Patching a gate into it **freezes the sequencer**, which then machine-guns its current step ✔ |
-| C3 | Critical | ENV | No `onRel` handler: notes from KEYS/MIDI never release, so the envelope sticks at sustain ✔ |
-| C4 | Critical | Share | Share links lose **all sequencer patterns** (version 1 written, version 2 codec used) ✔ |
-| H1 | High | Security | HTML/script injection via patch names and module titles in imported files ✔ |
-| H2 | High | Share/Load | A malformed or hostile link (e.g. module type `constructor`) wipes the current rack **without undo** ✔ |
-| H3 | High | KEYS | `m.def.free` is shared by all instances: deleting one KEYS releases another's notes ✔ |
-| H4 | High | OSC | **FM Amt** knob is dead; nothing feeds the FM gain node ✔ |
-| M1 | Medium | Toolbar | Duplicate `#clr` handler: **clear** is not one undo step (13 steps for the acid patch) and skips the song reset ✔ |
-| M2 | Medium | REVERB | Modulating Size/Decay/Damp/Diffuse does nothing ✔ |
-| M3 | Medium | Params | Pitch knobs with `cents:1` display wrong modulated values ("0¢" while at +1200¢) ✔ |
-| M4 | Medium | ENV | Loop mode never plays the release stage |
-| M5 | Medium | LFO | Tempo-synced periodic LFOs ignore BPM changes and aren't phase-locked; LFO oscillators leak on delete ✔ |
-| M6 | Medium | ECHO | Feedback range goes to 1.15, causing unbounded growth; 🎲 can land there |
-| M7 | Medium | Output | Master "limiter" is a compressor: bounces peak above 0 dBFS (1.165 observed) and clip in 16/24-bit ✔ |
-| M8 | Medium | Bounce | Ignores the master slider; 80 ms offset at the start ✔; silent 600 s cap; stems are pre-limiter/pre-master |
-| M9 | Medium | Song | Loading a built-in or clearing keeps the old song state (song mode/loop/length) |
-| M10 | Medium | Timing | Control-rate modulation and the SEQ playhead queue live in `requestAnimationFrame` |
-| L1–L12 | Low | various | Polish, dead code, docs drift (see below) |
-
----
-
-### C1 · Noise buffers are never filled
-
-`mkNoise()` (≈ line 817) contains a leftover placeholder from a refactor:
-
-```js
-function mkNoise(ac, pink) {
-  const len = ac.sampleRate * 3;
-  const buf = ac.createBuffer(1, len, ac.sampleRate);
-  /* … rest of the original mkNoise body, unchanged … */
-  return buf;            // ← all zeros
-}
-```
-
-**Effect:** OSC waves *white* and *pink* are silent. The noise parts of kick, snare,
-hat, clap, tom, rim and zap are missing, and **clap makes no sound at all**.
-Verified: both buffers have a peak of 0.
-
-**Fix:** restore the generator, e.g. white = `Math.random()*2-1`; pink = the Paul
-Kellet filter on white noise, normalised.
-
-### C2 · OSC `Trig` input references undefined functions
-
-Line ≈ 2785: `onTrig: (t, v, d) => fire(t, v, d), onRel: t => rel(t)`. Neither `fire`
-nor `rel` exists inside `DEFS.osc.build`; the `onRel` comment ("held gate (KEYS) ends
-here") suggests it was pasted into the wrong module (compare C3).
-
-**Effect:** a `ReferenceError` is thrown inside the source sequencer's `fire()`. It
-happens *before* `st.nextT` advances, and `pumpSched` swallows the error. As a result,
-the sequencer:
-
-* freezes on one step,
-* re-fires it on every 22 ms tick (42 retriggers per second observed on an ENV patched
-  to the same gate),
-* no longer delivers triggers to receivers listed after the OSC.
-
-**Fix:** remove the OSC Trig jack, or implement it (e.g. phase reset / hard sync).
-Also isolate per-receiver errors in `fireTrig` with a `try/catch`, so one faulty
-receiver can't stall a sequencer.
-
-### C3 · ENV ignores note-off
-
-`DEFS.env` registers only `onTrig` (line ≈ 3863). KEYS sends held events
-(`dur = null`) and later calls `fireRel`, but ENV has no `onRel`. Verified: after
-note-off the envelope stays at the sustain level indefinitely. This makes the
-KEYS/MIDI → ENV → VCA workflow unusable.
-
-**Fix:** `onRel: t => rel(t)` on the ENV Trig jack.
-
-### C4 · Share links drop sequencer state
-
-`SHARE.pack()` writes `v: VERSION` with `VERSION = 1` (line ≈ 5892), but stores SEQ
-state through `def.pack()` (the compact v2 `{k, a}` form). `unpack()` only calls
-`def.unpack` when `o.v >= 2` (line ≈ 5994). The compact object is therefore handed to
-`DEFS.seq.load`, which finds neither `banks` nor `steps` and keeps the defaults.
-Verified with the acid patch: the pattern returns as the default four-on-the-floor,
-and song clips keep pointing at empty patterns.
-
-**Fix:** `const VERSION = 2;` (the decoder already accepts 1 and 2; old v1 links keep
-working).
-
-### H1 · HTML injection from patch files
-
-`h()` and `toast()` use `innerHTML`, and several call sites interpolate user- or
-file-controlled strings:
-
-* the library row name (`h('div','lname',k)`, ≈ line 5698);
-* `toast('loaded "' + name + '"')`, `toast('imported "'+nm+'"')`, `toast('bad file: '+f.name)`;
-* `showInsp()` (≈ lines 2412/2460), which inserts module titles; titles come from
-  the `n` field of imported patches via `restoreTitle`.
-
-A crafted `.json` with `"name": "<img src=x onerror=…>"` or a module `"n"` like that
-runs script as soon as the library opens, and again when the module is selected.
-Verified: an injected `onerror` handler fired 6 times. Share links are *not* affected
-today, because `unpack` drops `n` and names. Library bundles shared between users
-are.
-
-**Fix:** use `textContent` for data (give `h()` a text variant, or escape it). Also
-validate `n` (e.g. require `^[A-Z]+ \d+$`) or drop it on import.
-
-### H2 · A bad share link destroys the current rack
-
-`DEFS` is a plain object, so `DEFS['constructor']`, `DEFS['toString']` etc. are
-truthy. `importFragment` accepts such a type, and `addModule` then throws
-`def.build is not a function`. Because `loadPatchData` has already called
-`clearPatch()`, and `history.replace` only records after `fn()` returns, the user is
-left with a partially loaded rack and **no undo entry**. Verified: a 10-module rack
-became 1 module, with `canUndo === false`.
-
-**Fix:**
-
-* Use `Object.hasOwn(DEFS, t)` (or `Object.create(null)`) everywhere a type is looked up.
-* Build the new rack before clearing, or make `history.replace` record the "before"
-  snapshot in a `finally`.
-* Wrap each module build in a `try/catch` during import.
-
-### H3 · KEYS overwrites the shared definition's `free`
-
-Line ≈ 5025: `m.def.free = () => m.allOff();` assigns onto `DEFS.keys`, so the *last
-built* KEYS instance wins. Offline renders build a hidden KEYS too. Verified: deleting
-KEYS #1 called `allOff()` on KEYS #2, leaving #1's held notes stuck in connected
-POLY/ENV modules.
-
-**Fix:** use a per-instance hook (e.g. `m.free`) and have `removeModule` call it. See
-M5 for the matching LFO bug.
-
-### H4 · OSC "FM Amt" has no input
-
-`const fm = AC.createGain(); fm.connect(o.frequency)` (≈ line 2771), but no jack or
-node ever connects *into* `fm`, so the knob scales silence. The module description
-promises "sub & FM". (Exponential FM still works by patching audio onto the **Pitch**
-knob.)
-
-**Fix:** `m.addIn({ id:'fm', label:'FM', kind:'sig', node: fm })`.
-
-### M1 · "clear" is registered twice
-
-Line ≈ 5848 sets an undoable `history.replace('clear rack', …)` handler, and line
-≈ 6199 overwrites it with `clearPatch(); P_init();`. Verified: one clear created
-**13 separate undo steps**. Neither version resets the song (see M9).
-
-**Fix:** delete the second assignment.
-
-### M2 · Reverb shape modulation is ineffective
-
-Size/Decay/Damp/Diffuse are control-rate parameters whose `set` is `queueIR`, a 140 ms
-debounced rebuild.
-
-* When modulated, `set` is called every frame, so the debounce timer restarts every
-  frame and the IR is **never** rebuilt while a cable is attached.
-* `buildIR()` reads `m.params.*.value` (the base value), not `effective()`, so even a
-  rebuild would ignore the modulation.
-
-Verified: the IR length stayed at 97,020 samples while the modulated size read 3.97 s.
-The knobs still show yellow rings, which is misleading.
-
-**Fix:** either remove `mod` from these knobs, or use `effective()` with a throttled
-(not debounced) rebuild on significant change.
-
-### M3 · Wrong modulated readout for linear-cents knobs
-
-`P.map()` treats `cents:1` as multiplicative: `base · 2^(cv·scale/1200)`. That's right
-for Hz knobs (cutoff, tone), but wrong for OSC/POLY **Pitch**, whose base value is
-itself in cents (0 by default). With a base of 0, `effective()` is always 0. Verified:
-the OSC readout showed "0¢" while the real offset was +1200 ¢, and the modulation ring
-collapses to a dot. Audio is correct, because the cable goes straight to `detune`.
-
-**Fix:** drop `cents:1` from the two Pitch knobs (linear `base + cv·scale` is correct
-there).
-
-### M4 · ENV Loop skips the release
-
-In loop mode `m.sched` calls `fire(t, 1, dly+a+hold+d)`, but `fire` only schedules
-the release when `!q.loop`. Each cycle therefore sits at sustain for the "release"
-portion of the period, then jumps to 0, which clicks. The visual suggests a full
-DAHDSR loop.
-
-**Fix:** schedule the release whenever `dur != null`.
-
-### M5 · LFO tempo sync & teardown
-
-* The LFO defines no `m.setT`, so a synced periodic LFO keeps its old rate after a BPM
-  change, until the Wave or Sync select is touched. It also has no `locate`, so synced
-  LFOs are not phase-aligned to the bar.
-* The oscillator created by `remake()` is not registered with `m.node()`. `m.free`
-  (≈ line 4157) is never called, because `removeModule` only calls `m.def.free`.
-  Deleted LFOs therefore leave a running `OscillatorNode` behind, and so does every
-  retrigger.
-
-**Fix:**
-
-* Add `m.setT = () => osc && setAP(osc.frequency, rateHz(), .02)`, plus a `locate`
-  that calls `remake(time)` with a phase offset.
-* Call a per-instance `m.free` in `removeModule`.
-
-### M6 · Echo feedback above unity
-
-`Fb` goes up to 1.15, and modulation (scale 0.5) can push it further. The loop only
-contains biquads (no saturation), so the signal grows exponentially. The only
-protection is the soft master compressor (M7). The 🎲 button can pick these values.
-
-**Fix:** cap the feedback at ≤ 0.98 or add a `tanh` shaper inside the loop; mark `fb`
-as `nornd` or limit its random range.
-
-### M7 · No true brick-wall limiting
-
-Both the per-OUT "Limiter" and the master chain are `DynamicsCompressorNode`s
-(threshold −6/−4 dB, ratio 12–14). They let peaks through. Verified: an acid-patch
-bounce peaked at **1.165** (+1.3 dBFS), which clips hard in the 16/24-bit exports.
-
-**Fix:** add a final `WaveShaper` soft-clipper, or apply peak normalisation/clamping
-with a warning at export.
-
-### M8 · Bounce fidelity
-
-* **Level differs from live.** The offline engine uses the default master gain (0.72),
-  not the toolbar **master** slider, so bounces are louder or quieter than what you
-  heard.
-* **Late start.** `transport.play()` starts 80 ms late (`START_DELAY`), so every bounce
-  begins with ~80 ms of silence and is 80 ms short at the end. Verified: first sound at
-  92 ms.
-* **Silent truncation.** The render is silently capped at 600 s
-  (`RENDER_LIMIT_SEC`), and the UI doesn't say so.
-* **Stems don't sum to the master.** Stems are tapped pre-OUT-limiter and pre-master
-  gain/compressor. This is fine for stems, but it isn't documented in the dialog.
-
-### M9 · Song state leaks across patch loads
-
-`loadBuiltin()` and both **clear** handlers never call `song.restore()`. After you've
-used song mode (no loop) on another patch, loading a built-in keeps song mode on.
-Playback then stops after the old `bars` length with "song finished", even though the
-new patch has no clips.
-
-**Fix:** call `song.restore()` in `clearPatch()` or `loadBuiltin()`.
-
-### M10 · Work tied to `requestAnimationFrame`
-
-* Control-rate modulation (`pumpControl`) runs only in the rAF loop. rAF stops in
-  background tabs and minimised windows, so modulation of drum knobs, SEQ
-  length/swing/transpose, echo time and similar freezes while you're in another tab.
-  (The 22 ms scheduler keeps running; audible tabs are generally exempt from timer
-  throttling, but that is browser-dependent.)
-* `SEQ.st.q` (the playhead queue) is drained only in `m.draw`, which runs only for
-  on-screen, expanded modules. It grows without bound while a SEQ is scrolled off
-  screen or collapsed, and song-driven pattern view changes are missed.
-
-**Fix:** run `pumpControl` from the scheduler interval too, and drain `st.q` in
-`sched`.
-
-### Low-severity items
+## 14. Changelog & known issues
+
+### 14.1 Fixed in this revision
+
+A full review found 18 critical/high/medium issues, and all of them are fixed. Each fix
+was re-verified in headless Chromium 141, both over `http://` and from `file://`.
+
+| # | Area | Problem | Fix | Verified result |
+|---|---|---|---|---|
+| C1 | Engine | `mkNoise()` was a placeholder, so every noise source (OSC white/pink, DRUM noise layers, the whole **clap** engine) was silent. | Real white noise plus pink noise (Paul Kellet filter), normalised to a 0.95 peak. | Both buffers peak at 0.95; clap is audible. |
+| C2 | OSC | The `Trig` input called undefined `fire`/`rel`. Patching a gate into it froze the sequencer, which then re-fired one step about 42×/s. | The broken jack is removed. Its slot is now the FM input (H4). `fireTrig`/`fireRel` also catch per-receiver errors, so one faulty module can never stall a sender. | With a deliberately throwing receiver, the SEQ keeps time (9 steps/s). |
+| C3 | ENV | No `onRel`, so notes from KEYS/MIDI/piano never released. | `onRel: t => rel(t)` on the ENV Trig jack. | Level 0.5 while held → 0 after note-off. |
+| C4 | Share | Links were labelled v1 but packed with the v2 codec, so **all sequencer patterns were lost**. | Links are written as `v: 2`. The decoder detects packed vs saved state by shape, so links made by the old encoder still open correctly. | Patterns survive the round trip, including a legacy link. |
+| H1 | Security | Patch names, module titles and file names reached `innerHTML` (library rows, toasts, inspector, song lanes), allowing script injection from a crafted `.json`. | New `ht()` (text) and `esc()` helpers. `toast()` is text-only. Library rows, metadata, inspector and song labels are escaped. `restoreTitle` only accepts `"<TYPE> <n>"`. | An injected `onerror` payload fires 0 times (previously 6). |
+| H2 | Share/Load | `DEFS['constructor']` etc. were truthy. A hostile link threw mid-load, wiped the rack and left no undo entry. | `DEFS` has a null prototype. `addModule` tears down and skips a module whose `build()` throws. Per-record import is defensive, and only `m<digits>` ids are reused. `history.replace()` rolls back to the previous rack if the load throws. Boot falls back to an empty rack if a shared patch fails. | Hostile link: invalid modules are skipped and the load is undoable (10 → 1 → 10). A forced mid-load exception restores the original 10 modules. |
+| H3 | KEYS | `m.def.free = …` overwrote the shared definition, so deleting one KEYS released another's notes. | Per-instance `m.free`, called by `removeModule` alongside `def.free`. | Deleting KEYS #1 calls only KEYS #1's `allOff`. |
+| H4 | OSC | The **FM Amt** knob scaled a gain node with no input. | New `FM` input jack (linear FM, depth set by FM Amt in Hz). | Zero crossings 1164 → 1677 with FM applied. |
+| M1 | Toolbar | A second `#clr` handler replaced the undoable one, so one clear made 13 undo steps. | The duplicate handler is removed. | Clear = 1 undo step. |
+| M2 | REVERB | Size/Decay/Damp/Diffuse modulation did nothing: the debounce restarted every frame, and `buildIR` read the un-modulated values. | `buildIR` uses `effective()`. Rebuilds are throttled (≤ 1 per 140 ms) and skipped for inaudible changes. | 12 distinct IRs in 2 s under LFO modulation (previously 1). |
+| M3 | Params | OSC/POLY **Pitch** used the multiplicative `cents` mapping on a cents-valued knob, so the readout showed "0¢" while at +1200¢. | `cents:1` removed from both Pitch knobs (linear `base + cv·4800`). | A CV of 0.25 reads "1200¢". |
+| M4 | ENV | Loop mode never played the release. | The release is scheduled for every timed gate, including loop cycles. | About 55 % of each loop cycle is spent in the release segment. |
+| M5 | LFO | Synced LFOs ignored BPM changes, weren't bar-aligned, and leaked their oscillator on delete; retrigger left an output gap. | `m.setT` follows the tempo. `m.locate` restarts the oscillator at the transport-implied phase, using a phase-shifted `PeriodicWave`. `m.free` now runs on delete. The old oscillator plays until the new one starts. | 7 → 14 zero crossings per 2 s when the tempo doubles; value −1.00 at beat 3 for a 1/1 sine started at beat 2. |
+| M6 | ECHO | Feedback up to 1.15 grew without bound; 🎲 could land there. | Soft saturator in the feedback loop (unity for small signals, ±1.5 ceiling). New `rnd:[lo,hi]` param option; echo Fb randomises within 0…0.85. | Fb 1.15 for 8 bars: stem peak 2.19 and finite; randomise max 0.847. |
+| M7 | Output | Master and OUT "limiters" were plain compressors, and bounces peaked at +1.3 dBFS. | `mkSoftClip()` brick-wall soft clipper after the master compressor and after each OUT compressor. | Worst-case bounce peak 0.82–0.89 (previously 1.165). |
+| M8 | Bounce | Ignored the master slider, started 80 ms late, silently capped at 600 s, and had undocumented stem tap points. | Offline master gain follows the slider. `transport.play(from, delay)` is used with delay 0 offline. The sequencer treats `nextT === null` (not 0) as "unset". Capping is reported in the dialog and a toast, and the dialog text documents the stems. | Peak ratio 2.01 for a 2× slider change; first sound at ~18 ms (compressor lookahead plus attack) instead of 92 ms; `capped: true` reported. |
+| M9 | Song | Loading a built-in or clearing kept the old song mode/loop/length. | `clearPatch()` resets the song; undo restores it. | After `loadBuiltin`: song off, 8 bars. |
+| M10 | Timing | Control-rate modulation ran only in rAF (which stops in background tabs), and the SEQ playhead queue only drained while the module was visible. | `pumpControl()` also runs on the 22 ms scheduler. `drainQ()` runs from `sched` as well as `draw`. | Queue length is 1 after 2 s of playback while collapsed. |
+
+Compatibility notes:
+
+* Patches that had a cable into the old OSC `Trig` jack load without that cable (the
+  jack never worked).
+* Share links created before this fix still decode, and now *with* their patterns.
+
+### 14.2 Remaining known issues (low severity)
 
 | # | Issue |
 |---|---|
-| L1 | **Debug logging left in:** `console.log(ORDER)`, `console.log(DEFS)` and a log per palette type (≈ lines 5093–5098). |
-| L2 | **Malformed help HTML:** the "Edit:" `<li>` is never closed; the "Play"/"Song" items nest inside it; the orphan fragment "(Shift+click ⧉ does the same).</li>" renders after the Song item (≈ lines 617–633). |
-| L3 | **Dead or duplicated code:** unused `setPlay()`; an empty "AudioParam utilities" doc block (≈ line 902); `history.clear()` called twice in `boot`; `posEl.textContent` written twice per frame; `encodeWav` (recorder) duplicates `encodeWavPCM`; per-module boilerplate destructures unused `cah/BUS/WT/NZ_*`; a fresh `Float32Array(256)` is allocated every frame for the meter. |
-| L4 | **Docs drift:** the SECTION INDEX lists 1–18 only (19–21 exist); it says the Recorder is "16-bit"/"master tap" while the bounce supports more; the module-object comment lists `m.reset` but not `m.locate`; `SCHEMA` comments mention "Patch S3/Step 6" leftovers. |
+| L1 | **Debug logging left in:** `console.log(ORDER)`, `console.log(DEFS)` and a log per palette type (≈ lines 5259–5264). |
+| L2 | **Malformed help HTML:** the "Edit:" `<li>` is never closed; the "Play"/"Song" items nest inside it; the orphan fragment "(Shift+click ⧉ does the same).</li>" renders after the Song item (≈ lines 629–635). |
+| L3 | **Dead or duplicated code:** unused `setPlay()`; an empty "AudioParam utilities" doc block (≈ line 957); `posEl.textContent` written twice per frame; `encodeWav` (recorder) duplicates `encodeWavPCM`; per-module boilerplate destructures unused `cah/BUS/WT/NZ_*`; a fresh `Float32Array(256)` is allocated every frame for the meter. |
+| L4 | **Docs drift in the file header:** the SECTION INDEX lists 1–18 only (19–21 exist); it describes the Recorder as "16-bit master tap" only; some comments mention "Patch S3/Step 6" leftovers. |
 | L5 | **Scale quantiser isn't octave-wrap aware:** `quantN` never considers the next octave's root, so in PentMaj a pitch class of 11 snaps down to 9 (distance 2) instead of up to 12 (distance 1). |
 | L6 | **Swing with odd step counts:** swing uses step-index parity, so with odd `Steps` the long/short feel flips every loop. |
-| L7 | **Acid preset drone:** SEQ Vel → VCA Gain at depth 0.9 keeps the VCA at ≥ 0.63 between notes (verified min 0.63), so the oscillator never fully closes; the ENV → VCA cable adds only the accent. (Probably intended to be much lower, or Vel → ENV.) |
+| L7 | **Acid preset drone:** SEQ Vel → VCA Gain at depth 0.9 keeps the VCA at ≥ 0.63 between notes, so the oscillator never fully closes; the ENV → VCA cable adds only the accent. |
 | L8 | **Echo Freeze:** turning the Fb knob while frozen overrides the frozen unity feedback. |
 | L9 | **Recording source mismatch:** the SEQ **● rec** tooltip promises recording from "KEYS", but notes played on a KEYS module's on-screen keyboard bypass `noteInput` and are not recorded. |
 | L10 | **Real-time recorder:** "bars" counts from the click, not from a bar line; it uses the deprecated `ScriptProcessorNode` on the main thread (UI jank can cause dropouts). |
 | L11 | **No feedback-cycle handling:** Web Audio mutes cycles that contain no `DelayNode`, so patching e.g. FILTER Out → FILTER In silently kills that path without any UI hint. |
-| L12 | **UI details:** the shortcut handler runs while overlays are open (Space plays behind the library). Esc does not close the bounce dialog or the song panel. Changing Shift mid-drag makes knobs jump (fine mode is computed from the drag origin). Canvas resolution is fixed at the `devicePixelRatio` of creation time. Worklet blocked on `file://` in Chromium (see § 1). The AudioContext is constructed before any user gesture, which logs a warning. `localStorage` names such as `__proto__` misbehave in the library object. |
+| L12 | **UI details:** the shortcut handler runs while overlays are open (Space plays behind the library). Esc does not close the bounce dialog or the song panel. Changing Shift mid-drag makes knobs jump (fine mode is computed from the drag origin). Canvas resolution is fixed at the `devicePixelRatio` of creation time. The worklet is blocked on `file://` in Chromium (see § 1). The AudioContext is constructed before any user gesture, which logs a warning. `localStorage` names such as `__proto__` misbehave in the library object. |
+| L13 | **Design notes from the fixes:** REVERB modulation is stepped (IR rebuilds), not smooth. Every LFO relock on play/seek/loop creates a fresh `OscillatorNode` (cheap, but visible in profilers). The soft clipper adds gentle saturation above −2 dBFS on the master. |
 
-### Suggested priority
+### 14.3 Testing
 
-1. C1–C4 and H4: small, local fixes that restore advertised features.
-2. H1/H2: escape all data going into `innerHTML`, harden type lookups, and make loads
-   atomic.
-3. H3, M1, M2, M3, M4, M5: correctness of individual modules and the toolbar.
-4. M6–M10: output safety, bounce fidelity and background behaviour.
-5. A tiny regression harness: the app already runs fine in headless Chromium (via
-   Playwright), and most issues above were checked that way (load each preset, bounce
-   two bars, assert peak/silence, round-trip a share link).
+There is no test suite in the repo. All of the verification above was done by driving
+the page in headless Chromium with Playwright, using `page.evaluate` against the app's
+globals (`modules`, `connect`, `renderOffline`, `SHARE`, `history`…). Useful checks to
+keep:
+
+* Boot each preset and assert no console errors.
+* Bounce two bars and assert `0 < peak ≤ 0.99`.
+* Round-trip a share link and compare SEQ patterns.
+* Load a hostile link or file and assert the rack survives and nothing executes.

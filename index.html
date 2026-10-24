@@ -545,7 +545,9 @@ button.bk.pend{animation:rblink .6s infinite}
 <div class="ov hide" id="expov">
   <div class="card" style="width:min(460px,92vw)">
     <h1 style="font-size:16px">BOUNCE <b>AUDIO</b></h1>
-    <p>Renders a hidden copy of your rack faster than real time. If song mode is on, the arrangement is used.</p>
+    <p>Renders a hidden copy of your rack faster than real time. If song mode is on, the arrangement is used.
+       The master file uses the current master volume and is limited to 10 minutes.
+       Stems are taken from each OUT module after its Level/Pan, before its limiter and the master bus.</p>
     <div class="exprow"><span class="lbl">length (bars)</span><input id="exbars" class="num" value="8"></div>
     <div class="exprow"><span class="lbl">tail (seconds)</span><input id="extail" class="num" value="2"></div>
     <div class="exprow"><span class="lbl">format</span>
@@ -680,13 +682,26 @@ button.bk.pend{animation:rblink .6s infinite}
  * a querySelector shorthand.
  * ==========================================================================*/
 
-/** Create an element. h('div','cls','<b>markup</b>') */
+/** Create an element. h('div','cls','<b>markup</b>')
+ *  SECURITY: `html` is parsed as markup. Never pass patch/file/link data here —
+ *  use ht() (text) or esc() for anything that did not come from this source file. */
 const h = (tag, cls, html) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (html != null) e.innerHTML = html;
   return e;
 };
+
+/** Create an element whose content is plain TEXT (safe for user/file data). */
+const ht = (tag, cls, text) => {
+  const e = h(tag, cls);
+  if (text != null) e.textContent = String(text);
+  return e;
+};
+
+/** Escape a value for interpolation into an HTML template string. */
+const esc = v => String(v).replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /** document.querySelector shorthand */
 const $ = sel => document.querySelector(sel);
@@ -702,7 +717,7 @@ const rnd = (a = 1, b = 0) => b + Math.random() * (a - b);
 
 /** Transient message in the bottom-centre of the screen */
 function toast(text) {
-  const e = h('div', 'tmsg', text);
+  const e = ht('div', 'tmsg', text);               // plain text: messages may contain file names
   $('#toast').appendChild(e);
   setTimeout(() => {
     e.style.transition = '.3s';
@@ -722,7 +737,7 @@ window.addEventListener('contextmenu', e => e.preventDefault());
  * One AudioContext for the whole app. Every Output module feeds BUS, which runs
  * through a DC-blocking high-pass, a safety limiter and the meter analyser.
  *
- *      [Output modules] → masterGain(BUS) → masterHP → masterLim → masterAna → speakers
+ *      [Output modules] → masterGain(BUS) → masterHP → masterLim → softClip → masterAna → speakers
  *
  * The context starts suspended until the splash screen is clicked (browser rule).
  * ==========================================================================*/
@@ -740,8 +755,28 @@ window.addEventListener('contextmenu', e => e.preventDefault());
  *  engine.hasWorklet  true once the crusher worklet is registered
  *  engine.transport   timeline (see 3.2)
  *
- *  [Output modules] → bus(masterGain) → masterHP → masterLim → masterAna → destination
+ *  [Output modules] → bus(masterGain) → masterHP → masterLim → softClip → masterAna → destination
  * --------------------------------------------------------------------------- */
+/**
+ * Brick-wall soft clipper: transparent below ~0.8, smooth knee, never exceeds
+ * ±0.99. A WaveShaper clamps its INPUT to ±1, so the signal is scaled by 1/4
+ * first and the curve covers ±4 (≈ +12 dBFS of headroom before hard clipping).
+ * Returns {input, output} nodes.
+ */
+function mkSoftClip(ac) {
+  const RANGE = 4, N = 4096, K = .8, CEIL = .99;
+  const pre = ac.createGain(); pre.gain.value = 1 / RANGE;
+  const ws  = ac.createWaveShaper();
+  const c   = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const u = (i / (N - 1) * 2 - 1) * RANGE, a = Math.abs(u);
+    const y = a <= K ? a : K + (CEIL - K) * Math.tanh((a - K) / (CEIL - K));
+    c[i] = Math.sign(u) * y;
+  }
+  ws.curve = c; ws.oversample = '2x';
+  pre.connect(ws);
+  return { input: pre, output: ws };
+}
  function createEngine(ac) {
   const engine = {
     ac,
@@ -768,8 +803,10 @@ window.addEventListener('contextmenu', e => e.preventDefault());
   const lim  = ac.createDynamicsCompressor();
   lim.threshold.value = -4; lim.knee.value = 6; lim.ratio.value = 12;
   lim.attack.value = 0.003; lim.release.value = 0.15;
+  const clip = mkSoftClip(ac);                      // final safety: output never exceeds ±1
   const ana  = ac.createAnalyser();      ana.fftSize = 1024;
-  gain.connect(hp).connect(lim).connect(ana).connect(ac.destination);
+  gain.connect(hp).connect(lim).connect(clip.input);
+  clip.output.connect(ana).connect(ac.destination);
   engine.bus = engine.masterGain = gain;
   engine.masterAna = ana;
   /* transport + tempo-aware helper */
@@ -817,7 +854,25 @@ function setPlay(p) { p ? transport.play() : transport.stop(); }
 function mkNoise(ac, pink) {
   const len = ac.sampleRate * 3;
   const buf = ac.createBuffer(1, len, ac.sampleRate);
-  /* … rest of the original mkNoise body, unchanged … */
+  const d = buf.getChannelData(0);
+  if (!pink) {
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  } else {
+    /* Paul Kellet's refined pink filter (-3 dB/oct) applied to white noise */
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      b0 = .99886 * b0 + w * .0555179;  b1 = .99332 * b1 + w * .0750759;
+      b2 = .96900 * b2 + w * .1538520;  b3 = .86650 * b3 + w * .3104856;
+      b4 = .55000 * b4 + w * .5329522;  b5 = -.7616 * b5 - w * .0168980;
+      d[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * .5362;
+      b6 = w * .115926;
+    }
+  }
+  /* normalise to a peak of ~0.95 so both colours sit at a similar level */
+  let pk = 0;
+  for (let i = 0; i < len; i++) pk = Math.max(pk, Math.abs(d[i]));
+  if (pk > 0) for (let i = 0; i < len; i++) d[i] *= .95 / pk;
   return buf;
 }
 /* ------------------------------------------------------------------ wavetables
@@ -1037,13 +1092,15 @@ const DIVK = Object.keys(DIVS);
       this.emit('tempo', { bpm });
     },
 
-    /** Start (resumes from the stored position unless fromBeat is given). */
-    play(fromBeat) {
+    /** Start (resumes from the stored position unless fromBeat is given).
+     *  @param {number} [fromBeat]
+     *  @param {number} [delay=START_DELAY]  head start in seconds (offline renders use 0) */
+    play(fromBeat, delay = START_DELAY) {
       if (this.playing) return;
       try { const r = engine.ac.resume(); if (r && r.catch) r.catch(() => {}); } catch (e) {}
       if (fromBeat != null) this._pos = Math.max(0, fromBeat);
       this.playing = true;
-      this._t0 = engine.now() + START_DELAY;
+      this._t0 = engine.now() + delay;
       this._b0 = this._pos;
       this.emit('play', { time: this._t0, beat: this._b0 });
     },
@@ -1123,6 +1180,7 @@ function fmtPos(beat) {
  *     fmt:    v => string,         // optional custom value display
  *     cents:  true,                // modulation is exponential (cents)
  *     nornd:  true,                // excluded from the 🎲 randomise button
+ *     rnd:    [lo, hi],            // optional safe range for 🎲 (param units)
  *     mod: {                       // omit entirely to make a knob unmodulatable
  *       targets: [AudioParam,...], // audio-rate destinations (optional)
  *       scale:   4800              // param units (or cents) per 1.0 of CV
@@ -1604,7 +1662,11 @@ const history = (() => {
       if (muted) return fn();
       const before = serialize();
       let out;
-      this.mute(() => { out = fn(); });
+      try { this.mute(() => { out = fn(); }); }
+      catch (err) {                                 // roll back: never lose the user's rack
+        this.mute(() => { try { loadPatchData(before); } catch (e2) { console.error('[history] rollback failed', e2); } });
+        throw err;
+      }
       const after = serialize();
       this.record({
         label,
@@ -1772,14 +1834,16 @@ history.onChange(() => {
  * OPTIONAL HOOKS A MODULE MAY SET
  *   m.draw(timestamp)        per animation frame, only when on-screen
  *   m.sched(now, ahead)      every ~22 ms, for look-ahead event scheduling
- *   m.reset(time)            called on transport start/stop
+ *   m.locate(beat, time)     transport play/seek/loop: phase-lock to `beat` at `time`
+ *   m.reset(time)            legacy fallback when there is no m.locate
  *   m.setT()                 called when the BPM changes (tempo-synced modules)
+ *   m.free()                 per-instance teardown (called by removeModule)
  *   m.trigNow(t, vel, dur)   convenience manual trigger
  *
  * OPTIONAL HOOKS ON THE DEF
  *   def.save(m) -> object    extra state for presets (e.g. sequencer steps)
  *   def.load(m, obj)         restore that state
- *   def.free(m)              custom teardown
+ *   def.free(m)              per-TYPE teardown (never assign it from build(): use m.free)
  * ==========================================================================*/
 
 
@@ -1873,9 +1937,16 @@ history.onChange(() => {
     el.querySelector('[data-a=col]').textContent = flag ? '▸' : '▾';
     setTimeout(() => { measure(m); wiresDirty = true; }, 20);
   };
-  /* ---- let the module build itself, then show it ---- */
-  def.build(m);
-  RACK_HOST.appendChild(el); 
+  /* ---- let the module build itself, then show it ----
+     A failing build must never leave half a module behind (or abort a load). */
+  try { def.build(m); }
+  catch (err) {
+    console.error('[addModule] ' + type + ' failed to build', err);
+    m.nodes.forEach(n => { try { n.stop && n.stop(); } catch (e) {} try { n.disconnect(); } catch (e) {} });
+    modCount[type]--;
+    return null;
+  }
+  RACK_HOST.appendChild(el);
   /* ---- header: click selects (Shift/Ctrl toggles), drag moves the whole selection ---- */
   m.head.addEventListener('pointerdown', e => {
     if (e.target.closest('.mb')) return;            // header buttons handled below
@@ -1915,7 +1986,8 @@ history.onChange(() => {
         history.run('randomise ' + def.name, () => m.plist.forEach(p => {
           if (p.nornd) return;
           const before = p.value;
-          if (p.k === 'knob')        p.setValue(n2p(p, Math.random()));
+          if (p.k === 'knob')        p.setValue(p.rnd ? lerp(p.rnd[0], p.rnd[1], Math.random())   // safe range
+                                                  : n2p(p, Math.random()));
           else if (p.k === 'select') p.setValue(p.opts[(Math.random() * p.opts.length) | 0]);
           recParam(p, before, { merge: false });
         }));
@@ -1942,7 +2014,8 @@ function removeModule(m) {
     recRemoveModule(m);
     m.plist.forEach(p => liveParams.delete(p));
     m.outs.forEach(j => tapped.delete(j));
-    if (m.def.free) { try { m.def.free(m); } catch (e) {} }
+    if (m.free)     { try { m.free(); }      catch (e) {} }   // per-instance teardown (LFO osc, KEYS notes)
+    if (m.def.free) { try { m.def.free(m); } catch (e) {} }   // per-type teardown
     m.nodes.forEach(n => {
       try { n.stop && n.stop(); } catch (e) {}
       try { n.disconnect(); }    catch (e) {}
@@ -2380,14 +2453,18 @@ function layoutWires() {
  function fireTrig(jack, t, vel, dur, note) {
   for (const c of jack.conns) {
     const to = c.to.j;
-    if (to && to.onTrig) to.onTrig(t, vel * c.amount, dur, note);
+    if (!to || !to.onTrig) continue;
+    try { to.onTrig(t, vel * c.amount, dur, note); }
+    catch (e) { console.error('[trig] ' + to.m.type + '.' + to.id, e); }
   }
 }
 /** Release a held note (only meaningful for events fired with dur === null). */
 function fireRel(jack, t, note) {
   for (const c of jack.conns) {
     const to = c.to.j;
-    if (to && to.onRel) to.onRel(t, note);
+    if (!to || !to.onRel) continue;
+    try { to.onRel(t, note); }
+    catch (e) { console.error('[rel] ' + to.m.type + '.' + to.id, e); }
   }
 }
 
@@ -2404,9 +2481,9 @@ function showInsp() {
   /* --- a cable is selected: show source → destination and a depth slider --- */
   if (selConn) {
     const c   = selConn;
-    const src = c.from.m.el.querySelector('.ttl').textContent + ' · ' + c.from.j.label;
-    const dst = c.to.m.el.querySelector('.ttl').textContent + ' · ' +
-                (c.to.p ? c.to.p.label : c.to.j.label);
+    const src = esc(c.from.m.el.querySelector('.ttl').textContent + ' · ' + c.from.j.label);
+    const dst = esc(c.to.m.el.querySelector('.ttl').textContent + ' · ' +
+                    (c.to.p ? c.to.p.label : c.to.j.label));
 
     el.appendChild(h('span', null,
       `<span class="k" style="color:${c.from.m.def.color}">${src}</span> → <span class="k">${dst}</span>`));
@@ -2455,7 +2532,7 @@ function showInsp() {
     el.append(b1, b2);
   /* --- a module is selected: show its description --- */
   } else if (selMod) {
-    const nm = selMod.el.querySelector('.ttl').textContent;
+    const nm = esc(selMod.el.querySelector('.ttl').textContent);
     el.appendChild(h('span', null,
       `<span class="k" style="color:${selMod.def.color}">${nm}</span> — ${selMod.def.desc || ''}`));
     el.appendChild(h('span', 'lbl',
@@ -2695,6 +2772,7 @@ function pumpSched(t, ahead) {
 }
 setInterval(() => {
   if (HEADLESS || AC.state !== 'running') return;
+  pumpControl();                                  // also in rAF; here so modulation survives hidden tabs
   const t = now(), ahead = t + LOOK;
   /* loop wrap: flush events up to the loop end, jump back, continue */
   const tLoop = transport.loopCrossing(ahead);
@@ -2709,7 +2787,7 @@ setInterval(() => {
  * -----------------------------------------------------------------------------
  * Each entry: { name, glyph, color, w, desc, build(m), [save], [load], [free] }
  * ==========================================================================*/
-const DEFS = {};
+const DEFS = Object.create(null);     // no prototype: hostile type names ('constructor'…) resolve to undefined
 
 
 /* ---------------------------------------------------------------------------
@@ -2717,6 +2795,7 @@ const DEFS = {};
  * ---------------------------------------------------------------------------
  * Signal flow:
  *
+ *   FM in ─ fm(FM Amt, Hz) ─► osc.frequency
  *   osc ─┬─────────────────────────► gO ─┐
  *        └─(+pw offset)─► waveshaper ► gP ┤
  *   sub ──────────────────────────► gS ┼─► lvl ─► out
@@ -2780,10 +2859,11 @@ DEFS.osc = {
     const ana = AC.createAnalyser(); ana.fftSize = 2048; out.connect(ana);
     const buf = new Float32Array(2048);
 
-    /* ---- jacks ---- */
-    m.addIn({ id:'trig', label:'Trig', kind:'trig',
-              onTrig: (t, v, d) => fire(t, v, d),
-              onRel:  t => rel(t) });                 // ← new: held gate (KEYS) ends here
+    /* ---- jacks ----
+       FM: any signal patched here is scaled by the FM Amt knob (in Hz) and added
+       to the oscillator frequency = linear (through-zero capable) FM.
+       For exponential FM / vibrato, patch onto the Pitch knob instead. */
+    m.addIn({ id: 'fm', label: 'FM', kind: 'sig', node: fm });
     m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
 
     /* ---- pitch ----
@@ -2811,7 +2891,7 @@ DEFS.osc = {
 
       // the main pitch CV destination: 1.0 CV = 4800 cents = 4 octaves
       { k:'knob', id:'fine', label:'Pitch', min:-1200, max:1200, def:0, curve:'lin',
-        unit:'ct', cents:1, fmt: v => v.toFixed(0) + '¢',
+        unit:'ct', fmt: v => v.toFixed(0) + '¢',       // linear in cents: display = base + cv·4800
         mod:{ targets:[o.detune, sub.detune], scale:4800 },
         set: v => { setAP(o.detune, v, .01); setAP(sub.detune, v, .01); } },
 
@@ -3053,7 +3133,7 @@ DEFS.osc = {
       { k:'knob', id:'r', label:'Release', min:.005, max:8, def:.35, curve:'exp', unit:'s', set: v => { S.r = v; } }
     ]);
     m.knobs([   // oscillators + output
-      { k:'knob', id:'fine', label:'Pitch', min:-1200, max:1200, def:0, curve:'lin', unit:'ct', cents:1,
+      { k:'knob', id:'fine', label:'Pitch', min:-1200, max:1200, def:0, curve:'lin', unit:'ct',
         fmt: v => v.toFixed(0) + '¢',
         mod:{ targets: [...vs.map(v => v.o1.detune), ...vs.map(v => v.o2.detune)], scale: 4800 },
         set: v => { S.fine = v; applyPitch(); } },
@@ -3566,7 +3646,7 @@ DEFS.crush = {
  * 11.5 · ECHO (ping-pong delay)
  * ---------------------------------------------------------------------------
  *   in ─┬─ dry ───────────────────────────────────────────┐
- *       └─ delayL ─ HP ─ LP ─ fbL ─ delayR ─ fbR ─┐       │
+ *       └─ delayL ─ HP ─ LP ─ sat ─ fbL ─ delayR ─ fbR ─┐ │
  *          delayL → panL ┐                        │       │
  *          delayR → panR ┴─ wet ──────────────────┴───────┴─ out
  *
@@ -3601,7 +3681,14 @@ DEFS.echo = {
     inn.connect(dry).connect(out);
     inn.connect(dl);
     dl.connect(hp).connect(lp);
-    lp.connect(fbL).connect(dr);
+    /* soft saturator in the loop: unity gain for small signals, bounded at ±1.5,
+       so Fb > 1 self-oscillates musically instead of growing without limit */
+    const satPre = m.node(AC.createGain()); satPre.gain.value = .25;   // WaveShaper input is clamped to ±1
+    const sat    = m.node(AC.createWaveShaper());
+    const sc = new Float32Array(2048);
+    for (let i = 0; i < 2048; i++) { const u = (i / 2047 * 2 - 1) * 4; sc[i] = 1.5 * Math.tanh(u / 1.5); }
+    sat.curve = sc;
+    lp.connect(satPre).connect(sat).connect(fbL).connect(dr);
     dr.connect(fbR).connect(dl);
     dl.connect(pL).connect(wet);
     dr.connect(pR).connect(wet);
@@ -3644,7 +3731,7 @@ DEFS.echo = {
       { k:'knob', id:'ratio', label:'R ratio', min:.25, max:2, def:1, curve:'lin',
         mod:{ scale:.75 }, set: v => { ratio = v; setT(); } },
 
-      { k:'knob', id:'fb',    label:'Fb', min:0, max:1.15, def:.45, curve:'lin', unit:'%',
+      { k:'knob', id:'fb',    label:'Fb', min:0, max:1.15, def:.45, curve:'lin', unit:'%', rnd:[0, .85],
         mod:{ targets:[fbL.gain, fbR.gain], scale:.5 },
         set: v => { setAP(fbL.gain, v, .03); setAP(fbR.gain, v, .03); } },
 
@@ -3737,13 +3824,16 @@ DEFS.rev = {
 
     const ctx = m.viz(44);
     let ir = null, timer = null;
+    m.free = () => clearTimeout(timer);
 
     /** Synthesise a stereo impulse response from the current knob values. */
     function buildIR() {
-      const size = m.params.size.value;
-      const dec  = m.params.dec.value;
-      const damp = m.params.damp.value;
-      const dif  = m.params.dif.value;
+      /* effective() = knob value + modulation, so cables into these knobs now work */
+      const size = m.params.size.effective();
+      const dec  = m.params.dec.effective();
+      const damp = m.params.damp.effective();
+      const dif  = m.params.dif.effective();
+      builtKey = irKey();
 
       const sr  = AC.sampleRate;
       const len = Math.max(256, Math.floor(size * sr));
@@ -3776,7 +3866,22 @@ DEFS.rev = {
       ir = b;
       cv.buffer = b;
     }
-    const queueIR = () => { clearTimeout(timer); timer = setTimeout(buildIR, 140); };
+    /* Rebuild requests are THROTTLED (at most one build per 140 ms), not debounced:
+       a modulated knob calls set() every frame, which used to restart a debounce
+       timer forever. Requests that don't change the IR audibly are ignored. */
+    let builtKey = '';
+    const irKey = () => {
+      const P = m.params;
+      if (!P.size || !P.dec || !P.damp || !P.dif) return '';
+      return [Math.round(Math.log(P.size.effective()) * 40),          // ≈ 2.5 % steps
+              Math.round(P.dec.effective() * 50), Math.round(P.damp.effective() * 50),
+              Math.round(P.dif.effective() * 50)].join(',');
+    };
+    const queueIR = () => {
+      if (timer || !m.params.dif) return;                               // pending, or still building knobs
+      if (irKey() === builtKey) return;
+      timer = setTimeout(() => { timer = null; if (irKey() !== builtKey) buildIR(); }, 140);
+    };
 
     m.knobs([
       { k:'knob', id:'size', label:'Size',    min:.15, max:8, def:2.2, curve:'exp', unit:'s', mod:{scale:2},  set:queueIR },
@@ -3860,7 +3965,9 @@ DEFS.env = {
     const oj = m.addOut({ id:'out', label:'Env', kind:'sig', node: out });
     mkTap(oj);                                    // always tapped: it's a mod source
 
-    m.addIn({ id:'trig', label:'Trig', kind:'trig', onTrig: (t, v, d) => fire(t, v, d) });
+    m.addIn({ id:'trig', label:'Trig', kind:'trig',
+              onTrig: (t, v, d) => fire(t, v, d),
+              onRel:  t => rel(t) });                 // held gate (KEYS / MIDI) ends here
 
     const ctx = m.viz(52);
 
@@ -3925,7 +4032,7 @@ DEFS.env = {
       if (q.hold > 0) { p.setValueAtTime(amp, tt + q.hold); tt += q.hold; }
       ramp(p, amp * q.s, tt, q.d, q.curve);     tt += q.d;        // decay to sustain
 
-      if (dur != null && !q.loop) {                               // release
+      if (dur != null) {                                          // release (timed gates + loop cycles)
         const rt = Math.max(t + .005, t + dur);
         cah(p, rt);
         ramp(p, 0, rt, q.r, q.curve);
@@ -4054,15 +4161,41 @@ DEFS.lfo = {
       return 1 / (DIVS[s] * beatSec());
     }
 
-    /** (Re)build the engine for the selected waveform. Also used as retrigger. */
-    function remake(t) {
+    /**
+     * A built-in waveform started at phase `ph` (0..1 of a cycle), as a PeriodicWave.
+     * Uses the same Fourier series the Web Audio spec uses for the built-in types,
+     * rotated by φ: b·sin(k(ωt+φ)) = b·cos(kφ)·sin(kωt) + b·sin(kφ)·cos(kωt).
+     */
+    function phaseWave(w, ph) {
+      const N = 256, re = new Float32Array(N + 1), im = new Float32Array(N + 1), phi = 2 * Math.PI * ph;
+      for (let k = 1; k <= N; k++) {
+        let b = 0;
+        if (w === 'sine')          b = k === 1 ? 1 : 0;
+        else if (w === 'square')   b = k % 2 ? 4 / (Math.PI * k) : 0;
+        else if (w === 'saw')      b = (k % 2 ? 2 : -2) / (Math.PI * k);
+        else if (w === 'triangle') b = k % 2 ? 8 / (Math.PI * Math.PI * k * k) * ((k - 1) / 2 % 2 ? -1 : 1) : 0;
+        re[k] = b * Math.sin(k * phi);
+        im[k] = b * Math.cos(k * phi);
+      }
+      return AC.createPeriodicWave(re, im);            // normalised like the built-in types
+    }
+
+    /** (Re)build the engine for the selected waveform. Also used as retrigger.
+     *  @param {number} [t]      start time (default now)
+     *  @param {number} [phase]  start phase 0..1 (used when phase-locking to the transport) */
+    function remake(t, phase = 0) {
       const w  = m.params.wave.value;
       const rp = m.params.rate;
 
       if (['sine', 'triangle', 'saw', 'square'].includes(w)) {
-        if (osc) { try { osc.stop(t || now()); } catch (e) {} try { osc.disconnect(); } catch (e) {} }
+        if (osc) {                                   // old osc plays until the new one starts (no gap)
+          const old = osc;
+          old.onended = () => { try { old.disconnect(); } catch (e) {} };
+          try { old.stop(t || now()); } catch (e) { try { old.disconnect(); } catch (e2) {} }
+        }
         osc = AC.createOscillator();
-        osc.type = (w === 'saw') ? 'sawtooth' : w;
+        if (phase > 1e-4 && phase < 1 - 1e-4) osc.setPeriodicWave(phaseWave(w, phase));
+        else osc.type = (w === 'saw') ? 'sawtooth' : w;
         osc.frequency.value = rateHz();
         osc.connect(oscGain);
         osc.start(t || now());
@@ -4071,7 +4204,12 @@ DEFS.lfo = {
         setAP(rndGain.gain, 0, .005);
         if (rp) rewireParam(rp, [osc.detune]);        // exponential rate mod
       } else {
-        if (osc) { try { osc.stop(t || now()); } catch (e) {} osc = null; }
+        if (osc) {
+          const old = osc;
+          old.onended = () => { try { old.disconnect(); } catch (e) {} };
+          try { old.stop(t || now()); } catch (e) { try { old.disconnect(); } catch (e2) {} }
+          osc = null;
+        }
         setAP(oscGain.gain, 0, .005);
         setAP(rndGain.gain, 1, .005);
         if (rp) rewireParam(rp, []);                  // control-rate instead
@@ -4082,11 +4220,11 @@ DEFS.lfo = {
     row.appendChild(m.param({
       k:'select', id:'wave', label:'Wave', def:'sine',
       opts:['sine','triangle','saw','square','s&h','random','drift'],
-      set: () => { if (m.ready) remake(); }
+      set: () => { if (m.ready) { remake(); relock(); } }
     }));
     row.appendChild(m.param({
       k:'select', id:'sync', label:'Sync', opts:['free', ...DIVK], def:'free',
-      set: () => { if (osc) setAP(osc.frequency, rateHz(), .02); }
+      set: () => { if (osc) setAP(osc.frequency, rateHz(), .02); if (m.ready) relock(); }
     }));
     m.ctrls.appendChild(row);
 
@@ -4110,6 +4248,25 @@ DEFS.lfo = {
 
     m.ready = 1;            // guard so the Wave selector doesn't remake too early
     remake();
+
+    /* ---- tempo sync ----
+       setT: follow BPM changes.  locate: on play/seek/loop, restart the periodic
+       oscillator at the phase the transport position implies, so synced LFOs are
+       bar-aligned (a 1/1 LFO always starts its cycle on the downbeat). */
+    m.setT = () => { if (osc && m.params.sync.value !== 'free') setAP(osc.frequency, rateHz(), .02); };
+    m.locate = (beat, time) => {
+      const s = m.params.sync.value;
+      if (s === 'free' || !osc) return;
+      const L = DIVS[s];
+      remake(time, (((beat % L) + L) % L) / L);
+    };
+    /** Re-lock after the Sync/Wave selection changes while the transport runs. */
+    function relock() {
+      const T = m.ctx.transport;
+      if (!T.playing) return;
+      const t = now() + .02;
+      m.locate(T.beatAt(t), t);
+    }
 
     /* ---- random engines: schedule the next step(s) ---- */
     let nxt = 0;
@@ -4154,7 +4311,7 @@ DEFS.lfo = {
       ctx.beginPath(); ctx.arc(W - 3, H / 2 - lv * H * .44, 2.6, 0, 7); ctx.fill();
     };
 
-    m.free = () => { if (osc) { try { osc.stop(); } catch (e) {} } };
+    m.free = () => { if (osc) { try { osc.stop(); } catch (e) {} try { osc.disconnect(); } catch (e) {} osc = null; } };
   }
 };
 
@@ -4218,7 +4375,7 @@ DEFS.seq = {
     st.bank    = 0;                   // pattern being viewed / edited / played
     st.steps   = st.banks[0];         // alias of the current bank (presets write into this)
     st.pending = null;                // queued pattern switch (applied at loop start)
-    st.step = 0; st.nextT = 0; st.dirv = 1;
+    st.step = 0; st.nextT = null; st.dirv = 1;     // null = not yet located (0 is a valid offline time)
     st.q = [];                        // {t,i,b} queue so the playhead matches what you hear
     st.hist = [];                     // last few fired steps {t,i,dur} → live-record quantising
     st.mode = 'on'; st.play = -1;
@@ -4420,8 +4577,9 @@ DEFS.seq = {
     };
     m.reset = t => m.locate(0, t);
     m.sched = (t, ahead) => {
+      drainQ();
       if (!transport.playing) return;
-      if (!st.nextT || st.nextT < t - 1) st.nextT = t + .02;
+      if (st.nextT == null || st.nextT < t - 1) st.nextT = t + .02;
       while (st.nextT < ahead) {
         fire(st.nextT);
         st.nextT += stepDur(st.step);
@@ -4501,15 +4659,22 @@ DEFS.seq = {
       ed.commit('record note');
     };
 
-    /* ===== BLOCK: DRAWING ===== */
-    let frameN = 0;
-    m.draw = () => {
-      const W = cnv.W, H = cnv.H, { L, sw, gh } = geo();
-      while (st.q.length && st.q[0].t <= now()) {
+    /** Consume playhead entries whose time has come. Called from sched() AND draw(),
+        so the queue can't grow while the module is off-screen/collapsed. */
+    function drainQ() {
+      const tn = now();
+      while (st.q.length && st.q[0].t <= tn) {
         const e = st.q.shift();
         st.play = e.i;
         if (e.b >= 0 && e.b !== st.bank) m.setBank(e.b);        // view follows the song
       }
+    }
+
+    /* ===== BLOCK: DRAWING ===== */
+    let frameN = 0;
+    m.draw = () => {
+      const W = cnv.W, H = cnv.H, { L, sw, gh } = geo();
+      drainQ();
       if (!transport.playing) st.play = -1;
       if ((frameN++ & 31) === 0) refreshUI();                   // keeps "has content" dots fresh
       ctx.clearRect(0, 0, W, H);
@@ -4927,7 +5092,8 @@ DEFS.out = {
     const wl  = m.node(AC.createGain());                       // limited path
 
     inn.connect(g).connect(p);
-    p.connect(lim).connect(wl);
+    const oc = mkSoftClip(AC); m.node(oc.input); m.node(oc.output);   // compressor + ceiling = real limiter
+    p.connect(lim).connect(oc.input); oc.output.connect(wl);
     p.connect(byp);
     wl.connect(BUS);
     byp.connect(BUS);
@@ -5022,7 +5188,7 @@ DEFS.keys = {
       else if (wasTop) setPitch(held[held.length - 1].note, t);   // fall back to the previous key
     };
     m.allOff = () => [...down.keys()].forEach(m.noteOff);
-    m.def.free = () => m.allOff();
+    m.free = () => m.allOff();                                 // per INSTANCE (never write to m.def)
 
     /* ===== BLOCK: CONTROLS ===== */
     const ctx = m.viz(54), cnv = ctx.canvas;
@@ -5328,21 +5494,26 @@ function importFragment(frag, o = {}) {
     oy += at.y - Math.min(...recs.map(r => r.y));
   }
   for (const r of recs) {
-    const reuse = keepIds && r.id && !modById(r.id);
+    const reuse = keepIds && typeof r.id === 'string' && /^m\d{1,9}$/.test(r.id) && !modById(r.id);
     const m = addModule(r.t, Math.round(r.x + ox), Math.round(r.y + oy), reuse ? r.id : undefined);
     if (!m) continue;
     out.idMap.set(r.id, m);
     out.modules.push(m);
-    if (keepIds && r.n) restoreTitle(m, r.n);
-    for (const k in (r.p || {})) {
-      const q = m.params[k], v = r.p[k];
-      if (!q) continue;
-      if (q.k === 'select' ? !q.opts.includes(v) : !(typeof v === 'number' && isFinite(v))) continue;
-      q.setValue(v, true);                       // knobs are also clamped by setValue
-    }
-    if (r.s && m.def.load) m.def.load(m, r.s);
-    for (const k in (r.mc || {}))                       // restore MIDI mappings
-      if (m.params[k] && Array.isArray(r.mc[k])) setMidi(m.params[k], +r.mc[k][0] || null, +r.mc[k][1]);
+    try {                                        // bad state in one record never aborts the load
+      if (keepIds && r.n) restoreTitle(m, r.n);
+      const pr = (r.p && typeof r.p === 'object') ? r.p : {};
+      for (const k of Object.keys(pr)) {
+        const q = Object.hasOwn(m.params, k) ? m.params[k] : null, v = pr[k];
+        if (!q) continue;
+        if (q.k === 'select' ? !q.opts.includes(v) : !(typeof v === 'number' && isFinite(v))) continue;
+        q.setValue(v, true);                     // knobs are also clamped by setValue
+      }
+      if (r.s && m.def.load) m.def.load(m, r.s);
+      const mc = (r.mc && typeof r.mc === 'object') ? r.mc : {};
+      for (const k of Object.keys(mc))           // restore MIDI mappings
+        if (Object.hasOwn(m.params, k) && Array.isArray(mc[k]) && Number.isFinite(+mc[k][1]))
+          setMidi(m.params[k], +mc[k][0] || null, +mc[k][1]);
+    } catch (err) { console.error('[import] bad data for ' + r.t, err); }
     if (r.c) m.setCollapsed(true);
     syncToTransport(m);                       // params (div, len…) are final now
   }
@@ -5355,6 +5526,7 @@ function importFragment(frag, o = {}) {
 }
 /** Restore a saved title and keep the per-type counter ahead of it. */
 function restoreTitle(m, name) {
+  if (typeof name !== 'string' || !name.startsWith(m.def.name + ' ') || !/^\d{1,6}$/.test(name.slice(m.def.name.length + 1))) return;
   m.el.querySelector('.ttl').textContent = name;
   const n = parseInt(name.slice(m.def.name.length), 10);
   if (n > (modCount[m.type] || 0)) modCount[m.type] = n;
@@ -5364,6 +5536,7 @@ function restoreTitle(m, name) {
 function clearPatch() {
   [...modules].forEach(removeModule);
   modCount = {};
+  song.restore();                              // song state belongs to the rack (undo restores it)
   selSet.clear(); selMod = null;               // selSet is introduced in Patch 2
 }
 /** Raw, history-free patch load. Used by deserialize() and by undo/redo. */
@@ -5695,12 +5868,13 @@ function renderLib() {
     const d   = u[k];
     const row = h('div', 'lrow' + (k === curPatch ? ' cur' : ''));
 
-    const nm = h('div', 'lname', k);
+    const nm = ht('div', 'lname', k);                    // text only: names come from files/prompts
     nm.title = 'click to load';
     nm.onclick = () => { loadUser(k); $('#libov').classList.add('hide'); };
 
-    const meta = h('div', 'lmeta',
-      `${(d.mods || []).length} mod · ${(d.cs || []).length} cbl · ${d.bpm || '?'} bpm · ${fdate(d.date)}`);
+    const nMods = Array.isArray(d.mods) ? d.mods.length : 0, nCs = Array.isArray(d.cs) ? d.cs.length : 0;
+    const bpm = Number.isFinite(+d.bpm) && +d.bpm > 0 ? Math.round(+d.bpm) : '?';
+    const meta = ht('div', 'lmeta', `${nMods} mod · ${nCs} cbl · ${bpm} bpm · ${fdate(+d.date)}`);
 
     const acts = h('div', 'lacts');
     const mk = (label, title, fn) => {
@@ -5889,7 +6063,7 @@ setInterval(() => {
  * values are validated in importFragment (Patch S3).
  * ==========================================================================*/
  const SHARE = (() => {
-  const VERSION = 1;
+  const VERSION = 2;                   // v2 = SEQ state uses the compact def.pack() codec
   const MAX_RAW = 2e6;                 // max decompressed bytes
   const MAX_MODS = 200, MAX_CABLES = 2000;
   /* ---- base64url <-> bytes (chunked so big arrays don't blow the call stack) ---- */
@@ -5990,8 +6164,12 @@ setInterval(() => {
       v: SCHEMA, kind: 'patch', bpm: num(o.b) || 120,
       mods: o.m.map((r, i) => {
         const def = DEFS[r[0]];
-        // v2 state goes through def.unpack; v1 state was already in save() format
-        const s = (o.v >= 2 && def && def.unpack) ? def.unpack(r[5]) : (r[5] || null);
+        // Packed state goes through def.unpack; state already in save() format ({banks}/{steps})
+        // is used as-is. Detecting the shape (not just the version) also rescues links made by
+        // an earlier encoder that wrote packed state under v:1.
+        const raw = r[5];
+        const saved = raw && typeof raw === 'object' && ('banks' in raw || 'steps' in raw);
+        const s = (raw && !saved && def && def.unpack) ? def.unpack(raw) : (raw || null);
         return { id: 'm' + (i + 1), t: String(r[0]), x: num(r[1]), y: num(r[2]),
                  c: r[3] ? 1 : 0, p: (r[4] && typeof r[4] === 'object') ? r[4] : {}, s };
       }),
@@ -6196,7 +6374,6 @@ bpmEl.addEventListener('pointerdown', e => {
 $('#mvol').addEventListener('input', e => setAP(masterGain.gain, +e.target.value, .02));
 
 $('#fit').onclick  = fitView;
-$('#clr').onclick  = () => { if (confirm('clear the whole rack?')) { clearPatch(); P_init(); fitView(); } };
 $('#help').onclick = () => $('#helpov').classList.remove('hide');
 $('#helpclose').onclick = () => $('#helpov').classList.add('hide');
 
@@ -6587,7 +6764,7 @@ const songUI = (() => {
     });
     inner.appendChild(ruler);
     list.forEach(m => {
-      const lab = h('div', null, title(m)); lab.style.color = m.def.color; labels.appendChild(lab);
+      const lab = ht('div', null, title(m)); lab.style.color = m.def.color; labels.appendChild(lab);
       const row = h('div', 'sg-row');
       row.style.backgroundImage =
         `repeating-linear-gradient(90deg,rgba(255,255,255,.07) 0 1px,transparent 1px ${z}px)`;
@@ -6660,7 +6837,9 @@ async function withHeadlessRack(engine, fn) {
 async function renderOffline({ bars, tail, stems, onProgress }) {
   const patch = serialize();                                     // the rack exactly as it is now
   const sr    = AC.sampleRate;
-  const secs  = Math.min(RENDER_LIMIT_SEC, bars * 4 * (60 / patch.bpm) + tail);
+  const want  = bars * 4 * (60 / patch.bpm) + tail;
+  const secs  = Math.min(RENDER_LIMIT_SEC, want);
+  const capped = want > RENDER_LIMIT_SEC;
   /* which OUT modules become stems (max 15 → 32 channels) */
   const stemSrc   = stems ? modules.filter(m => m.type === 'out').slice(0, 15) : [];
   const stemIds   = stemSrc.map(m => m.id);
@@ -6671,6 +6850,7 @@ async function renderOffline({ bars, tail, stems, onProgress }) {
   const off = new OfflineAudioContext(nCh, Math.ceil(secs * sr), sr);
   const eng = createEngine(off);
   await eng.init({ workletSrc: CRUSH_SRC });
+  eng.masterGain.gain.value = +$('#mvol').value;                // same level as the live master slider
   wireTransport(eng);
   eng.transport.setTempo(patch.bpm);
 
@@ -6694,7 +6874,7 @@ async function renderOffline({ bars, tail, stems, onProgress }) {
     /* let debounced builders (reverb impulse response) finish before we start */
     await new Promise(r => setTimeout(r, 250));
     eng.transport.loop = null;                                     // no looping offline
-    eng.transport.play(0);
+    eng.transport.play(0, 0);                                      // start at exactly t = 0 (no lead-in)
     const STEP = 1024;                                             // frames between control updates
     const nSteps = Math.floor(off.length / STEP);
     const tick = t => { pumpControl(); pumpSched(t, t + LOOK); };
@@ -6712,7 +6892,7 @@ async function renderOffline({ bars, tail, stems, onProgress }) {
   const files = [{ name: 'master', L: buffer.getChannelData(0), R: buffer.getChannelData(1) }];
   stemNames.forEach((name, k) =>
     files.push({ name, L: buffer.getChannelData(2 + k * 2), R: buffer.getChannelData(3 + k * 2) }));
-  return { files, sampleRate: sr };
+  return { files, sampleRate: sr, seconds: secs, capped };
 }
 
 /* ===== BLOCK: ENCODERS ===================================================== */
@@ -6798,7 +6978,9 @@ const exportUI = (() => {
       const wav = f => new Uint8Array(encodeWavPCM(f.L, f.R, res.sampleRate, bits));
       if (res.files.length === 1) downloadBlob(new Blob([wav(res.files[0])], { type: 'audio/wav' }), `modular-${stamp}.wav`);
       else downloadBlob(makeZip(res.files.map(f => ({ name: f.name + '.wav', data: wav(f) }))), `modular-stems-${stamp}.zip`);
-      prog(1, 'done ✔'); toast('render complete');
+      const mmss = s => Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0');
+      prog(1, res.capped ? 'done ✔ — capped at ' + mmss(res.seconds) + ' (limit)' : 'done ✔');
+      toast(res.capped ? 'render capped at ' + mmss(res.seconds) + ' (' + RENDER_LIMIT_SEC / 60 + ' min limit)' : 'render complete');
     } catch (e) {
       console.error(e); prog(0, ''); toast('render failed: ' + (e.message || e));
     } finally {
@@ -6825,11 +7007,14 @@ async function boot(which) {
   refreshPresets();
   $('#splash').classList.add('hide');
 
-  if (which === 'shared' && sharedPatch) { curPatch = null; deserialize(sharedPatch); }
+  if (which === 'shared' && sharedPatch) {
+    curPatch = null;
+    try { deserialize(sharedPatch); }
+    catch (e) { console.error(e); toast('shared patch could not be loaded: ' + e.message); loadBuiltin('init'); which = 'init'; }
+  }
   else { loadBuiltin(which); $('#presets').value = 'b:' + which; }
-  history.clear();
-  history.clear();                         // the initial load is not an undo step (Patch 1)
-  
+  history.clear();                         // the initial load is not an undo step
+
   setTimeout(() => { if (which !== 'init') transport.play(); }, 350);
   toast(ENGINE.hasWorklet ? 'ready · worklet dsp online' : 'ready · fallback dsp');
 }
