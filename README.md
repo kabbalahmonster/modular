@@ -31,6 +31,7 @@ is compressed into the link's `#hash`, so no server is ever involved.
 12. [Architecture (developer guide)](#12-architecture-developer-guide)
 13. [Function reference](#13-function-reference)
 14. [Changelog & known issues](#14-changelog--known-issues)
+15. [Audio engine: performance & scaling](#15-audio-engine-performance--scaling)
 
 ---
 
@@ -54,6 +55,10 @@ instead of *"ready · worklet dsp online"*.
 
 No AudioContext exists until you click a splash button, so browsers don't log
 autoplay warnings.
+
+**Latency mode:** the output buffer defaults to **balanced**. You can switch to
+*low* (snappier keyboard, less headroom) or *safe* (big racks, weak machines) in the
+**perf** panel. The panel saves your rack and reloads to apply the change. See § 15.
 
 ---
 
@@ -153,6 +158,7 @@ A single beat-based clock (`createTransport`) drives everything tempo-related:
 | **MIDI** | Request Web MIDI access and listen to all inputs (hot-plug aware). |
 | **learn** | MIDI-learn mode: click a control, then move a hardware knob. |
 | **song** | Open/close the song arranger (also **S**). |
+| **perf** | Engine performance panel (also **P**): measured DSP load, glitches, latency mode, scheduler and UI stats (§ 15). |
 | **bounce** | Offline render dialog (faster than real time, optional stems). |
 | **patch ▼** | Built-in racks and patches saved in this browser. |
 | **save** | Overwrite the current library patch, or *save as…* if there is none (**Ctrl+S**). |
@@ -237,6 +243,7 @@ Splash, Help, Patch Library and Bounce dialogs. Toast messages appear bottom-cen
 | **H** | Toggle help |
 | **L** | Open library |
 | **S** | Toggle song arranger |
+| **P** | Toggle the engine performance panel |
 | **K** | Enable the QWERTY piano |
 | **Esc** | Close library/help/bounce dialogs and the song panel, disable piano & MIDI learn, leave a text field, deselect (works even while typing) |
 
@@ -320,6 +327,9 @@ the filter (via the filter's `detune`).
 | Voices | 1…8 | 8 | – | Active voice count. Lowering it releases held voices above the limit. |
 | Glide | 0…0.5 s | 0 | – | Portamento, **only when Voices = 1**. |
 | VelSens | 0…1 | 0.6 | – | Velocity sensitivity (amp and filter envelope). |
+
+**CPU:** silent voices are *parked*, i.e. disconnected from the output, so an idle
+POLY costs almost nothing; each sounding voice costs roughly one OSC + FILTER (§ 15).
 
 **Voice allocation:** a free voice is taken first (the one whose release ended
 earliest). Otherwise a voice is stolen: releasing voices before held ones, then the
@@ -890,7 +900,7 @@ than JSON.
 | 7 | Jacks, cables & routing | taps, connect/disconnect, cable SVG, cable drag, trigger protocol |
 | 8 | Inspector bar | `showInsp` |
 | 9 | Stage navigation, clipboard, duplicate | pan, marquee, zoom, fit, copy/cut/paste, duplicate |
-| 10 | Scheduler | `readTaps`, `pumpControl`, `pumpSched`, 22 ms interval |
+| 10 | Scheduler | `readTaps`, `pumpControl`, `pumpSched`; 10.1 live scheduler: Worker clock, adaptive look-ahead, late accounting |
 | 11 | Module definitions | `DEFS.osc … DEFS.keys` |
 | 12 | Palette | buttons from `ORDER` |
 | 13 | Render loop | rAF: control-rate mods, visible-module drawing, cables, meter, song panel |
@@ -901,6 +911,7 @@ than JSON.
 | 19 | Note input hub | QWERTY, Web MIDI, MIDI learn |
 | 20 | Song | model + arranger panel |
 | 21 | Offline render | headless rack, `renderOffline`, WAV/ZIP encoders, export dialog |
+| 22 | Engine performance | `measureDsp`, perf panel, `window.MODULAR.perf` |
 | 18 | Boot | splash → `ENGINE.init` → load patch |
 
 ### Engine
@@ -959,6 +970,7 @@ Optional hooks a module sets:
 | `m.onStop(rewind)` | transport stop | (no module implements it yet) |
 | `m.setT()` | tempo change | recompute tempo-synced times (ECHO, LFO) |
 | `m.free()` | `removeModule` | per-instance teardown (LFO oscillator, KEYS held notes, REVERB timer) |
+| `m.cancelAfter(t)` | transport stop / seek | withdraw anything already scheduled after `t` (DRUM hits, ENV triggers, POLY notes, SEQ CV). **Required** for any module that schedules ahead, so the look-ahead can never leak sound past Stop. |
 | `m.onDpr(ratio)` | `devicePixelRatio` changed | resize extra canvases not created with `m.viz` (SCOPE's trail buffer) |
 | `m.trigNow(t, vel, dur)` | – | manual trigger convenience |
 
@@ -977,6 +989,7 @@ Optional `def` hooks:
 { k: 'knob'|'select'|'toggle', id, label,
   min, max, def, step?, curve: 'lin'|'exp'|'pow2'|'pow3', unit?, fmt?,
   opts?,                    // selects
+  onMod?: () => {},         // called when mod cables are added/removed (e.g. gate a branch)
   cents?: true,             // modulation is exponential (base · 2^(cv·scale/1200))
   nornd?: true,             // excluded from 🎲
   rnd?: [lo, hi],           // safe range for 🎲, in parameter units (e.g. echo feedback)
@@ -1015,14 +1028,23 @@ Recorders: `recAddModule`, `recRemoveModule`, `recCable`, `recAmount`, `recParam
 
 ### Rendering and timing
 
-* **Audio events and control-rate modulation:** a `setInterval(22 ms)` loop runs
-  `pumpControl()` (read taps, apply control-rate params), calls `m.sched(t, t+0.12)`
-  on every module, and handles seamless loop wrapping (`loopCrossing`/`wrapLoop`).
-  Because this loop is a timer, modulation keeps working in background tabs, where
-  rAF is paused.
-* **Visuals:** the `requestAnimationFrame` loop (capped at ~66 fps) also refreshes the
-  taps for smooth knob rings, draws only on-screen modules, re-lays cables when
-  `wiresDirty`, and updates the meter, position readout and song panel.
+* **Audio events and control-rate modulation:** `schedTick()` runs every 20 ms on a
+  **Worker clock**, which isn't throttled like page timers in background tabs; a
+  page `setInterval` is the fallback. Each tick it runs `pumpControl()` (read taps,
+  apply control-rate params, skipping unchanged values) and calls
+  `m.sched(t, t + SCHED.look)` on every module, and it handles seamless loop wrapping
+  (`loopCrossing`/`wrapLoop`).
+  * `SCHED.look` is **adaptive**: 100–350 ms, following measured tick jitter.
+  * Late windows are counted.
+  * Stop and seek call `m.cancelAfter()`.
+* **Visuals:** the `requestAnimationFrame` loop (capped at ~66 fps) is purely
+  visual:
+  * It draws on-screen modules round-robin within a **6 ms budget**
+    (`UI.budget`), re-lays cables when `wiresDirty`, and updates the meter, position
+    readout, song panel and perf panel.
+  * It never does audio work, so it can be throttled or budgeted freely.
+
+See § 15 for the reasoning and measurements.
 
 ### Adding a module
 
@@ -1088,7 +1110,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `p2n(p, v)` / `n2p(p, n)` | Parameter value ↔ 0…1 knob position for each curve; `n2p` quantises to `step`. |
 | `fmtv(p, v)` | Readout formatting by unit (Hz/k, ms/s, %, ±int). |
-| `class P` | A parameter. `modSum()` (Σ depth × cv), `modRange()`, `map(base, sum)` (linear/cents/custom), `effective()`, `apply()`, `setValue(v, silent)`, `refreshMod()` (registers control-rate params and creates source taps), `render()` (knob arc, pointer, mod ring, live dot). |
+| `class P` | A parameter. `modSum()` (Σ depth × cv), `modRange()`, `map(base, sum)` (linear/cents/custom), `effective()`, `apply()`, `applyLive()` (scheduler path: skips `set()` when the value moved < 0.02 % of the range), `setValue(v, silent)`, `refreshMod()` (registers control-rate params, creates source taps, re-applies the value, calls `onMod`), `render()` (knob arc, pointer, mod ring, live dot). |
 | `arcP(cx, cy, r, a0, a1)` | SVG arc path. |
 | `knobEl(p)` | Knob widget with drag, wheel, double-click, Alt-drag and right-click behaviours. |
 | `selEl(p)`, `tgEl(p)` | Select and toggle widgets (undoable). |
@@ -1099,7 +1121,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `locateModule(m, beat, time)` | Call `m.locate` (or `m.reset`). |
 | `syncToTransport(m)` | Phase-lock a module added during playback. |
-| `wireTransport(engine)` | Subscribe the engine's transport events to its modules' hooks. |
+| `wireTransport(engine)` | Subscribe the engine's transport events to its modules' hooks; on stop/seek it first calls every module's `cancelAfter(now)`. |
 | `applyView()`, `s2w(x, y)` | Apply the pan/zoom transform; screen → scene coordinates. |
 | `history.*` | `record, begin, end, run, mute, replace, undo, redo, clear, onChange`, plus getters `active/canUndo/canRedo/undoLabel/redoLabel`. `replace()` is atomic: if the change throws, the previous rack is restored before the error propagates. |
 | `recAddModule`, `recRemoveModule`, `recCable`, `recAmount`, `recParam`, `recMove`, `recCollapse` | Command factories (called after the action). |
@@ -1148,9 +1170,10 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `cloneBoundaryCables(mods, idMap, mode)` | Re-create cables crossing a duplicated selection. |
 | `duplicateModules(mods, {cables})` | Duplicate to the right; one undo step. |
 | `readTaps()` | Average each tapped jack's analyser buffer into `jack.cv`. |
-| `pumpControl()` | `readTaps()` + apply all control-rate params. |
+| `pumpControl()` | `readTaps()` + `applyLive()` on all control-rate params. |
 | `pumpSched(t, ahead)` | Call every module's `sched` (errors are swallowed). |
-| scheduler interval | Every 22 ms: `pumpControl()` (so modulation keeps running in background tabs, where rAF stops), loop wrap, `pumpSched`, `songTick`. |
+| `SCHED` | Live scheduler state: `look` (adaptive look-ahead), `min/max`, `interval`, `gaps` (ring of tick gaps), `late/lateMs`, `ticks/work`, `clock` ('worker' or 'page'). |
+| `schedTick()` | One scheduler tick (Worker clock, 20 ms): adapt `look`, `pumpControl()`, late accounting, loop wrap, `pumpSched(t, t + look)`, `songTick()`. |
 
 ### § 11 Module definitions
 
@@ -1171,7 +1194,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 | Function | Description |
 |---|---|
-| `frame(t)` | Main rAF loop. |
+| `frame(t)` | Main rAF loop: budgeted round-robin module drawing (`UI.budget`, `UI.cursor`), cables, meter, readouts. |
 | `rescaleCanvases()` | Re-rasterise every module canvas (`m.vizList`) when `devicePixelRatio` changes (monitor switch / browser zoom); modules with extra canvases implement `m.onDpr(ratio)` (SCOPE). |
 | `migrate(d)` | Validate and upgrade schema (`MIGRATIONS`). |
 | `modById(id)` | Module lookup. |
@@ -1231,11 +1254,18 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `makeZip(files)` | Store-only ZIP writer (CRC-32). |
 | `downloadBlob(blob, name)` | Trigger a download. |
 | `exportUI.open()` / `exportUI.close()` | Bounce dialog (internal `go()`); `close()` refuses while a render runs. |
-| `boot(which)` | `startAudio()` → engine init → load patch → autoplay. Ignored if already booted. |
+| `boot(which)` | `startAudio()` → engine init → load patch (a built-in, `'shared'` or `'session'`) → autoplay. Ignored if already booted. |
+| `latencyPref()` | Stored output-buffer mode (`interactive` / `balanced` (default) / `playback`), used by `startAudio()`. |
+| `measureDsp(secs = 2)` | Render `secs` of the current rack offline with real control/scheduler ticks and return `{load, wallMs, secs}` (CPU seconds per audio second). Pauses live audio while measuring. |
+| `perfUI.toggle()/tick()/close()` | Engine performance panel (4 Hz refresh). |
+| `window.MODULAR.perf` | Console access: `measureDsp`, `SCHED`, `UI`. |
 
 ---
 
 ## 14. Changelog & known issues
+
+A separate engine performance evaluation, with its changes and measurements, is in
+[§ 15](#15-audio-engine-performance--scaling).
 
 ### 14.1 Fixed in this revision
 
@@ -1319,3 +1349,191 @@ keep:
 * Record 2 bars at a known tempo and assert the WAV length.
 * Use real mouse events (Playwright `page.mouse`) for knob drags: synthetic
   `PointerEvent`s can't take pointer capture.
+
+---
+
+## 15. Audio engine: performance & scaling
+
+This section records an evaluation of the engine's efficiency and headroom, what was
+changed as a result, and the rules that keep it scaling as modules are added.
+
+### 15.1 How the engine uses the machine
+
+Three things have to keep up, and they fail in different ways:
+
+| Resource | What runs there | Budget | What failure sounds like |
+|---|---|---|---|
+| **Audio thread** | The Web Audio graph: every node *pulled* by the destination, every 128-frame block | 128 frames = **2.67 ms at 48 kHz**, every block, forever | **Dropouts / crackles** (buffer underrun) |
+| **Main thread** | JS event generation (`schedTick` → `m.sched`: notes, drum hits, envelope automation), control-rate modulation, UI, drawing | Events are created `SCHED.look` ahead. A stall longer than that makes events late. | **Late / flammed notes** while the audio itself stays clean |
+| **Helper threads** | Convolution tails (Chromium), the Worker clock, AudioWorklets' host | – | – |
+
+Two Web Audio facts drive most of the design:
+
+1. **A gain of 0 does not save CPU.** Everything upstream of a node that is
+   connected toward the destination is rendered every block, audible or not. The only
+   way to make an idle branch free is to disconnect it.
+2. **`AnalyserNode`s are "automatic pull" nodes.** They are rendered even when
+   nothing downstream listens. Every module visualiser therefore keeps its module's
+   graph alive, which is fine as long as each module keeps its *own* idle branches
+   unplugged.
+
+### 15.2 Evaluation: what was measured and found
+
+Method (reproducible; see § 15.6):
+
+* **Audio-thread cost:** render a copy of the rack offline and divide wall-clock
+  render time by audio time. This gives "% of one core".
+* **Timing robustness:** play the Acid preset while freezing the main thread for
+  N ms every 0.8 s, and count notes created after their scheduled time.
+* **UI cost:** Chrome DevTools Protocol (CDP) metrics and per-frame timing.
+
+All numbers come from a 4-vCPU cloud VM running headless Chromium 141 with software
+rendering, so absolute values are pessimistic and noisy (±20% between sessions).
+Before/after comparisons were therefore run **interleaved in the same browser
+session**, and the minimum of 3–5 runs is reported.
+
+Findings on the code as it was:
+
+| # | Finding | Impact |
+|---|---|---|
+| E1 | **POLY rendered all 8 voices continuously** (16 oscillators + 8 filters), silent or not. | ~7.8% of a core per POLY at rest; 8 idle POLYs ≈ half a core. |
+| E2 | **OSC, LFO, FILTER, ECHO and OUT rendered unused branches.** OSC had its noise players, pulse shaper and sub always running. LFO had the random engine and a 20 kHz "smooth" filter always in path. FILTER always ran its second biquad. ECHO modulated its delay times at zero wobble (forcing per-sample delay interpolation). OUT ran its compressor with the limiter off. | 17–40% of each module's cost was wasted. |
+| E3 | **The CRUSH worklet** evaluated `Math.pow` and per-sample parameter lookups for every sample, even when parameters were constant. | ~2.5% of a core per instance. |
+| E4 | **Fixed 120 ms look-ahead on a page timer:** any main-thread stall longer than 120 ms produced late notes, and page timers are throttled in background tabs. | With 250 ms stalls: 11 late notes in 10 s, worst 147 ms late. |
+| E5 | **Stop did not cancel what was already scheduled.** | Up to one look-ahead of notes played after Stop; this blocked increasing the look-ahead. |
+| E6 | **Control-rate modulation ran twice per cycle** (rAF and timer), and wrote a new `setTargetAtTime` event every time even when the CV hadn't moved. | Wasted main-thread time and automation-timeline churn, growing with every modulated knob. |
+| E7 | **Every visible module redrew every frame with no budget.** | Canvas work ≈ 20% of the main thread at 52 modules, growing linearly with rack size. |
+| E8 | **`latencyHint: 'interactive'`** (smallest buffer) was hard-coded. | Least headroom against audio-thread spikes, with no way to trade latency for stability. |
+| E9 | **No way to see headroom.** | You found out you were over budget by hearing crackles. |
+
+### 15.3 What changed (and measured effect)
+
+| Change | Where | Measured effect |
+|---|---|---|
+| **POLY voice parking.** A voice's amp is disconnected from the output once its release tail is < −70 dB, and reconnected at note-on (`wake`/`park`). | `DEFS.poly` | Idle POLY **7.78% → 0.01%** of a core. Active cost scales with voices actually sounding. |
+| **Branch gating.** OSC links only the selected source (and the sub only when audible), with fade-then-unlink after 80 ms (no clicks). LFO connects only the active engine and bypasses Smooth at 0. FILTER links biquad 2 only in 24 dB mode. ECHO unplugs the wobble LFO at 0. OUT links its compressor only while Limiter is on; its safety clipper no longer oversamples (the master's still does). A new `onMod` param hook re-gates when a cable makes a branch audible. | `DEFS.osc/lfo/filter/echo/out`, `P.refreshMod` | OSC **−40%**, ECHO **−40%**, OUT **−35%**, LFO **−20%**, FILTER **−17%** |
+| **CRUSH fast path.** When all parameters are block-constant (the normal case), maths is hoisted out of the sample loop. Unpatched instances emit silence without running the chain. | worklet `CrushProc` | **−47%** |
+| **Worker clock + adaptive look-ahead.** Ticks come from a dedicated Worker. `look = clamp(1.5 × worst recent gap + 40 ms, 100, 350 ms)` grows instantly on jank and relaxes slowly. Under-runs are counted. | `SCHED`, `schedTick` | 250 ms stalls: **11 → 1** late notes (the first stall, before adapting), worst 147 → 42 ms. 150 ms stalls: 2 → 0. |
+| **Stop/seek cancellation.** `m.cancelAfter(t)` withdraws future DRUM hits, ENV triggers, POLY notes and SEQ CV automation. | `wireTransport`, modules | With the look-ahead forced to 350 ms: peak after Stop **0.23 → 0**. |
+| **Control-rate path.** Runs once per scheduler tick (not in rAF), and `applyLive()` skips unchanged values. Removing the last cable now restores the knob's own value (a bug found along the way). | `pumpControl`, `P.applyLive` | Scheduler tick work 1.1 → 0.46 ms at 52 modules; no idle automation writes. |
+| **UI frame budget.** On-screen modules draw round-robin within 6 ms/frame; the rest keep their last pixels and go first next frame. | `frame`, `UI` | Frame work stays ≈ 6–7 ms at 52 and 104 modules (previously unbounded). Average scheduler tick gap 47 → 19 ms (52 modules) and 190 → 18 ms (104 modules) on the test VM. |
+| **Latency mode.** `balanced` is now the default; `interactive`/`playback` can be chosen in the perf panel (saved, applied on reload with the rack restored). | `latencyPref`, `startAudio` | More buffer headroom by default; selectable per machine. |
+| **Perf panel + `measureDsp()`** (§ 15.6). | SECTION 22 | Headroom is visible before it becomes audible. |
+
+Whole-rack result, for a dense 13-module "unit" (SEQ→OSC→FILTER→CRUSH→VCA→ECHO→REVERB
+→OUT, plus LFO, drum lane and a constantly playing POLY; each unit has its *own*
+reverb):
+
+| Units (modules) | Before | After |
+|---|---|---|
+| 1 (13) | 36% of a core | 29% |
+| 2 (26) | 81% | 46% |
+| 4 (52) | 150% | 115% |
+
+The remaining cost is dominated by what is actually sounding: one REVERB per unit
+(≈ 5% each) and POLY voices that are really playing (the benchmark's four POLYs play
+on every other 16th note).
+
+Replacing the four reverbs with one shared reverb brings the rack to 49 modules and
+**~80% of a core** on this VM (measured: 0.79–0.92). That is within one core, but above
+the 50% comfort line, so on this machine it calls for the *safe* latency mode or fewer
+sounding POLY voices. A typical desktop CPU has noticeably more single-thread headroom
+than this VM, but use the perf panel's measurement on your own machine rather than
+these numbers.
+
+### 15.4 Capacity planning (for users)
+
+* **Watch "DSP load" in the perf panel** (press **P**, then *measure DSP*).
+  * Below **50%**: comfortable.
+  * 50–80%: works, but other tabs or OS activity can cause crackles.
+  * Above 80%: expect dropouts.
+* **Reverbs are the most expensive module.** Use one REVERB on a MIXER output (a
+  "send") instead of one per voice. Smaller **Size** is cheaper.
+* **POLY costs per sounding voice.** Long releases keep voices alive; lower
+  **Voices** or **Release** if a big chord pad pushes the load up.
+* **Idle is free now.** Unused OSC waves, a 12 dB FILTER, zero-wobble ECHO and
+  Limiter-off OUT cost little. A module only costs what it is doing.
+* **If you hear crackles** with headroom apparently left, switch the latency mode to
+  *safe*. If notes are late but the audio is clean, watch *late windows* and
+  *tick gap* in the panel: something on the page (or another tab) is blocking the
+  main thread.
+* **Collapse modules you aren't watching.** Their visuals stop; their sound doesn't.
+
+### 15.5 Rules for module authors (keeping it scalable)
+
+1. **Disconnect what can't be heard.** Never rely on `gain = 0` to save CPU. Gate
+   branches by connecting/disconnecting them: fade out first, unlink after ~80 ms,
+   and relink immediately on demand. Use `onMod` when a modulation cable can make a
+   branch audible.
+2. **Everything that runs ahead of the clock must be cancellable.** If `m.sched` or
+   a trigger handler schedules something in the future, implement `m.cancelAfter(t)`.
+3. **Schedule against audio time only.** Create events in `m.sched(t, ahead)` or in
+   trigger handlers with the given time `t`. Never use `setTimeout` for musical
+   timing.
+4. **Register every persistent node with `m.node()`** and free per-instance
+   resources in `m.free()`. Short-lived per-event nodes (DRUM hits) are fine, as long
+   as they `stop()` themselves so the browser can collect them.
+5. **Keep `draw()` cheap and allocation-free.** Reuse typed arrays, avoid
+   `shadowBlur` on large paths, and draw only what changed where possible. The frame
+   budget protects the rack from one slow visual, but not from death by a hundred cuts.
+6. **AudioWorklet code:** add a block-constant fast path, hoist `Math.pow`/divisions
+   out of the sample loop, and emit silence early when unpatched.
+7. **Control-rate parameters are for slow things.** Anything that must be smooth or
+   audio-rate should declare `mod.targets` (AudioParams) instead.
+8. **Use `m.ctx` only** (never globals), so the same code runs live, offline (bounce)
+   and in `measureDsp()`.
+
+### 15.6 Measuring
+
+* **In the app:** the **perf** panel shows:
+  * measured DSP load (`measureDsp()`), and browser-reported glitches where
+    `AudioContext.playoutStats` exists;
+  * sample rate, latency mode, base + output latency;
+  * scheduler clock, adaptive look-ahead, tick gap p95/worst, late windows and tick
+    work;
+  * UI frame work vs budget, and modules drawn per frame;
+  * graph size (modules, cables, persistent nodes, control-rate params, taps, POLY
+    voices rendering).
+* **In the console:** `await MODULAR.perf.measureDsp(4)` returns
+  `{ load, wallMs, secs }`. `MODULAR.perf.SCHED` and `MODULAR.perf.UI` expose the live
+  scheduler and frame stats.
+* **Benchmark harness used for this evaluation.** The approach is Playwright with
+  headless Chromium, injecting helpers that:
+  * build N identical units;
+  * render 8 s offline with the real control/scheduler ticks, excluding tick time
+    from the measurement;
+  * profile each module type (8 instances each, against a fixture);
+  * run the main-thread stall test.
+
+  Two lessons for reproducing it:
+  * Suspend the live AudioContext while measuring, and never run two benchmarks at
+    once: both skew results badly.
+  * Compare builds interleaved in one session.
+* **Caveat:** offline rendering runs convolution tails inline, while live Chromium
+  moves long tails to a helper thread. `measureDsp()` therefore *overstates* REVERB's
+  live audio-thread cost, which is a safe direction for a headroom gauge.
+
+### 15.7 Architectural limits and roadmap
+
+These are the next steps if racks need to grow much further:
+
+* **Event generation still lives on the main thread.** The adaptive look-ahead and
+  cancellation make it robust to stalls of up to ~350 ms. Beyond that, notes can be
+  late.
+  * **Next step:** move the sequencer clock and envelope/trigger generation into an
+    AudioWorklet, so timing becomes sample-accurate and independent of the page.
+  * **Catch:** DRUM/POLY voices are built from native nodes on the main thread, so
+    those engines would also need worklet implementations. Sharing state efficiently
+    (`SharedArrayBuffer`) requires cross-origin isolation (COOP/COEP headers), which
+    plain static hosts such as GitHub Pages can't set. `postMessage` works without it.
+* **Convolution reverb** is the heaviest module. An algorithmic reverb (FDN) in a
+  worklet would be cheaper per instance and smoothly modulatable. Today's IR
+  rebuilds are stepped.
+* **Per-hit node creation in DRUM** (up to ~15 nodes per hat hit) is cheap today, but
+  could use pooled voices at very high hit rates.
+* **One AudioContext = one audio thread.** Browsers don't spread a single graph
+  across cores. Beyond one core's worth of DSP, the answer is cheaper DSP (above),
+  not more modules.
+* **Visuals** run on the main thread with software-rendered canvases on some
+  machines. An `OffscreenCanvas` in a worker would move them off the thread that
+  generates events.

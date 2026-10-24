@@ -414,6 +414,19 @@ button.bk.pend{animation:rblink .6s infinite}
 .exprow .num{cursor:text}
 #exprog{height:6px;border-radius:3px;background:rgba(255,255,255,.1);margin-top:12px;overflow:hidden}
 #exprog i{display:block;height:100%;width:0;background:var(--acc);transition:width .1s}
+/* engine performance panel (SECTION 22) */
+#perf{position:absolute;top:10px;right:10px;z-index:36;display:none;width:318px;padding:10px 12px;
+  border-radius:12px;background:rgba(8,11,18,.96);border:1px solid var(--line2);cursor:default;
+  font:10.5px var(--mono);color:#cfe0f5;box-shadow:0 20px 50px -20px #000}
+#perf.open{display:block}
+#perf h4{font:9.5px var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--acc);margin:8px 0 3px}
+#perf h4:first-child{margin-top:0}
+#perf .pr{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid var(--line)}
+#perf .pk{color:var(--dim)}
+#perf .ok{color:#4ade80} #perf .warn{color:#fde047} #perf .bad{color:#fb7185}
+#perf .prow{display:flex;gap:6px;margin-top:6px;align-items:center}
+#perf .prow button,#perf .prow select{font-size:10px;padding:3px 7px}
+#perf .hint{font:9.5px var(--sans);color:var(--dim);margin-top:6px;line-height:1.4}
 
 
 </style>
@@ -459,6 +472,7 @@ button.bk.pend{animation:rblink .6s infinite}
     <div class="bgroup">
       <button id="songbtn" title="Song arranger (S)">song</button>
       <button id="bounce"  title="Render audio offline — faster than real time, optional stems">bounce</button>
+      <button id="perfbtn" title="Engine performance: DSP load, latency, scheduler, UI budget (P)">perf</button>
     </div>
     <div class="sep"></div>
 
@@ -783,7 +797,7 @@ window.addEventListener('contextmenu', e => e.preventDefault());
  * first and the curve covers ±4 (≈ +12 dBFS of headroom before hard clipping).
  * Returns {input, output} nodes.
  */
-function mkSoftClip(ac) {
+function mkSoftClip(ac, oversample = '2x') {
   const RANGE = 4, N = 4096, K = .8, CEIL = .99;
   const pre = ac.createGain(); pre.gain.value = 1 / RANGE;
   const ws  = ac.createWaveShaper();
@@ -793,7 +807,7 @@ function mkSoftClip(ac) {
     const y = a <= K ? a : K + (CEIL - K) * Math.tanh((a - K) / (CEIL - K));
     c[i] = Math.sign(u) * y;
   }
-  ws.curve = c; ws.oversample = '2x';
+  ws.curve = c; ws.oversample = oversample;
   pre.connect(ws);
   return { input: pre, output: ws };
 }
@@ -882,10 +896,22 @@ let AC = null;                               // ENGINE.ac once started
 const now    = () => ENGINE.now();
 const setAP  = (p, v, t) => ENGINE.setAP(p, v, t);
 const transport = ENGINE.transport;
+/**
+ * Output buffer size preference (AudioContext latencyHint), chosen in the perf panel.
+ *   interactive  smallest buffer: lowest latency, least headroom against dropouts
+ *   balanced     (default) ~2× buffer: still fine for playing, much more robust
+ *   playback     largest buffer: for big racks / weak machines; keyboard feels late
+ * Can only be applied when the context is created, i.e. on the next start.
+ */
+const LAT_KEY = 'mod_latency';
+const latencyPref = () => {
+  try { const v = localStorage.getItem(LAT_KEY); if (['interactive', 'balanced', 'playback'].includes(v)) return v; } catch (e) {}
+  return 'balanced';
+};
 /** Create the live AudioContext (must run inside a user gesture). Idempotent. */
 function startAudio() {
   if (ENGINE.ac) return ENGINE;
-  ENGINE.attach(new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }));
+  ENGINE.attach(new (window.AudioContext || window.webkitAudioContext)({ latencyHint: latencyPref() }));
   AC = ENGINE.ac;
   ENGINE.masterGain.gain.value = +$('#mvol').value;
   return ENGINE;
@@ -964,8 +990,39 @@ class CrushProc extends AudioWorkletProcessor {
   }
   process(inputs, outputs, p) {
     const I = inputs[0], O = outputs[0];
-    if (!O) return true;
+    if (!O || !O.length) return true;
     const n = O[0].length;
+    /* nothing patched in: emit silence without running the per-sample chain */
+    if (!I || !I.length) { for (let c = 0; c < O.length; c++) O[c].fill(0); return true; }
+
+    /* FAST PATH: every parameter is constant for this 128-frame block (the normal
+       case — params only become a-rate arrays while being automated/modulated).
+       All per-block maths is hoisted out of the sample loop. */
+    if (p.bits.length === 1 && p.down.length === 1 && p.drive.length === 1 &&
+        p.fold.length === 1 && p.grit.length === 1 && p.mix.length === 1) {
+      const dr = p.drive[0], norm = 1 / Math.tanh(Math.max(1, dr));
+      const fo = p.fold[0], foK = (1 + fo * 6) * Math.PI * .5, doFold = fo > .001;
+      const grK = p.grit[0] * .12, doGrit = p.grit[0] > .001;
+      const lv = Math.pow(2, Math.max(1, p.bits[0]) - 1), inv = 1 / lv;
+      const down = p.down[0], mx = p.mix[0], dryK = 1 - mx;
+      for (let c = 0; c < O.length; c++) {
+        const ic = I[Math.min(c, I.length - 1)], oc = O[c];
+        let ph = this.ph[c], hold = this.hold[c];
+        for (let i = 0; i < n; i++) {
+          const dry = ic[i];
+          let x = Math.tanh(dry * dr) * norm;
+          if (doFold) x = Math.sin(x * foK);
+          if (doGrit) x += (Math.random() * 2 - 1) * grK;
+          x = Math.round(x * lv) * inv;
+          if (++ph >= down) { ph -= down; hold = x; }
+          oc[i] = dry * dryK + hold * mx;
+        }
+        this.ph[c] = ph; this.hold[c] = hold;
+      }
+      return true;
+    }
+
+    /* GENERAL PATH: at least one parameter is a-rate this block */
     const g = (a, i) => (a.length > 1 ? a[i] : a[0]);   // a-rate or k-rate read
 
     for (let c = 0; c < O.length; c++) {
@@ -1252,6 +1309,7 @@ function fmtPos(beat) {
  *     fmt:    v => string,         // optional custom value display
  *     cents:  true,                // modulation is exponential (cents)
  *     nornd:  true,                // excluded from the 🎲 randomise button
+ *     onMod:  () => {},            // optional: called when mod cables are added/removed
  *     rnd:    [lo, hi],            // optional safe range for 🎲 (param units)
  *     mod: {                       // omit entirely to make a knob unmodulatable
  *       targets: [AudioParam,...], // audio-rate destinations (optional)
@@ -1357,7 +1415,25 @@ class P {
   effective() { return this.map(this.value, this.modSum()); }
 
   /** Push the value into the audio graph. */
-  apply() { this.set(this.audioMod ? this.value : this.effective()); }
+  apply() {
+    const v = this.audioMod ? this.value : this.effective();
+    this._live = v;
+    this.set(v);
+  }
+
+  /**
+   * Control-rate update from the scheduler. Skips set() when the modulated value has
+   * not moved by more than 0.02 % of the range: an unchanged CV would otherwise write
+   * a new automation event (setTargetAtTime) ~45×/s per parameter for nothing.
+   */
+  applyLive() {
+    const v = this.effective(), last = this._live;
+    if (v === last) return;
+    if (typeof v === 'number' && typeof last === 'number' &&
+        Math.abs(v - last) <= Math.abs(this.max - this.min) * 2e-4) return;
+    this._live = v;
+    this.set(v);
+  }
 
   /**
    * Set the base value from the UI or from a preset.
@@ -1382,9 +1458,12 @@ class P {
     // control-rate parameters need a per-frame update; audio-rate ones don't
     if (n && !this.audioMod) liveParams.add(this);
     else liveParams.delete(this);
+    // control-rate: re-apply so removing the last cable restores the knob's own value
+    if (!this.audioMod && this.set) this.apply();
 
     // make sure every source has a CV tap so we can display/compute its value
     for (const c of this.conns) mkTap(c.from.j);
+    if (this.onMod) { try { this.onMod(); } catch (e) {} }   // e.g. OSC re-gates its sub branch
     this.render();
   }
 
@@ -1621,10 +1700,12 @@ function wireTransport(engine) {
   const T = engine.transport;
   const mine = () => modules.filter(m => m.ctx === engine);
   const locateAll = ({ beat, time }) => { if (time != null) mine().forEach(m => locateModule(m, beat, time)); };
+  /** Drop events already scheduled beyond `t` (look-ahead must never leak past Stop/seek). */
+  const cancelAll = t => mine().forEach(m => { if (m.cancelAfter) { try { m.cancelAfter(t); } catch (e) {} } });
   T.on('play', locateAll);
-  T.on('seek', locateAll);
+  T.on('seek', info => { if (info.time != null) cancelAll(engine.now()); locateAll(info); });
   T.on('loop', locateAll);                        // seamless wrap → sequencers jump to loop start
-  T.on('stop',  ({ rewind }) => mine().forEach(m => m.onStop && m.onStop(rewind)));
+  T.on('stop',  ({ rewind }) => { cancelAll(engine.now()); mine().forEach(m => m.onStop && m.onStop(rewind)); });
   T.on('tempo', () => mine().forEach(m => m.setT && m.setT()));
 }
 wireTransport(ENGINE);
@@ -2881,22 +2962,73 @@ function readTaps() {
     j.cv = s / j.buf.length;
   }
 }
-function pumpControl() { readTaps(); for (const p of liveParams) p.apply(); }
+function pumpControl() { readTaps(); for (const p of liveParams) p.applyLive(); }
 function pumpSched(t, ahead) {
   for (const m of modules) {
     if (m.sched) { try { m.sched(t, ahead); } catch (e) { /* keep the clock alive */ } }
   }
 }
-setInterval(() => {
-  if (HEADLESS || !AC || AC.state !== 'running') return;
-  pumpControl();                                  // also in rAF; here so modulation survives hidden tabs
-  const t = now(), ahead = t + LOOK;
+/* -----------------------------------------------------------------------------
+ * 10.1 · LIVE SCHEDULER
+ * -----------------------------------------------------------------------------
+ * Audio itself renders on the audio thread, but EVENTS (notes, drum hits, envelope
+ * automation) are created here, on the main thread, `look` seconds ahead of the
+ * audio clock. If the main thread stalls for longer than `look`, events are late.
+ *
+ *  * CLOCK   — ticks come from a dedicated Worker timer (not throttled like page
+ *              timers in background tabs); page setInterval is the fallback.
+ *  * ADAPTIVE LOOK-AHEAD — the window follows measured tick jitter:
+ *              look = clamp(1.5 × worst recent gap + 40 ms, 100 ms, 350 ms).
+ *              It grows immediately when the page janks and shrinks slowly back,
+ *              so a quiet page stays responsive and a busy one stays glitch-free.
+ *  * LATE ACCOUNTING — if a tick starts after the previous window ended, the gap
+ *              is counted (SCHED.late / lateMs) and shown in the perf panel.
+ *  * STOP/SEEK — modules cancel anything already scheduled in the future
+ *              (m.cancelAfter), so a longer look-ahead never leaks notes past Stop.
+ * --------------------------------------------------------------------------- */
+const SCHED = {
+  look: LOOK, min: 0.10, max: 0.35, interval: 20,       // seconds / ms
+  gaps: new Float32Array(150), gi: 0,                   // ring of recent tick gaps (≈ 3 s)
+  last: 0, prevAhead: 0, late: 0, lateMs: 0, ticks: 0, work: 0, clock: 'page'
+};
+function schedTick() {
+  if (HEADLESS || !AC || AC.state !== 'running') { SCHED.last = 0; SCHED.prevAhead = 0; return; }
+  const w0 = performance.now();
+  if (SCHED.last) {
+    SCHED.gaps[SCHED.gi++ % SCHED.gaps.length] = (w0 - SCHED.last) / 1000;
+    let worst = 0; for (const g of SCHED.gaps) if (g > worst) worst = g;
+    const target = clamp(worst * 1.5 + .04, SCHED.min, SCHED.max);
+    SCHED.look = target > SCHED.look ? target : SCHED.look + (target - SCHED.look) * .01;
+  }
+  SCHED.last = w0;
+  pumpControl();
+  const t = now(), ahead = t + SCHED.look;
+  if (transport.playing && SCHED.prevAhead && t > SCHED.prevAhead) {   // window under-run
+    SCHED.late++; SCHED.lateMs += (t - SCHED.prevAhead) * 1000;
+  }
   /* loop wrap: flush events up to the loop end, jump back, continue */
   const tLoop = transport.loopCrossing(ahead);
   if (tLoop != null) { pumpSched(t, tLoop); transport.wrapLoop(); }
   pumpSched(t, ahead);
+  SCHED.prevAhead = ahead;
   songTick();                                     // "song finished" check (SECTION 20)
-}, 22);
+  SCHED.ticks++; SCHED.work += performance.now() - w0;
+}
+/* Worker clock (Blob URL, then data: URL for file:// pages); page timer as fallback. */
+(function startClock() {
+  const src = `setInterval(() => postMessage(0), ${SCHED.interval});`;
+  const urls = [() => URL.createObjectURL(new Blob([src], { type: 'application/javascript' })),
+                () => 'data:application/javascript;base64,' + btoa(src)];
+  for (const mk of urls) {
+    try {
+      const w = new Worker(mk());
+      w.onmessage = schedTick;
+      SCHED.clock = 'worker';
+      return;
+    } catch (e) { /* try next */ }
+  }
+  setInterval(schedTick, SCHED.interval);
+})();
 
 
 /* =============================================================================
@@ -2959,7 +3091,26 @@ DEFS.osc = {
     const nw = m.node(AC.createBufferSource()); nw.buffer = NZ_W; nw.loop = true; nw.connect(gW);
     const np = m.node(AC.createBufferSource()); np.buffer = NZ_P; np.loop = true; np.connect(gPk);
 
-    [gO, gP, gS, gW, gPk].forEach(g => g.connect(lvl));
+    /* ---- BRANCH GATING (CPU) ----
+       Only branches that can be heard are connected to `lvl`. A gain of 0 does not
+       stop Web Audio from rendering everything upstream of it, but a disconnected
+       branch is never pulled, so e.g. the noise players, pulse shaper and sub
+       oscillator cost nothing unless selected. Switching off fades first, then
+       disconnects 80 ms later (no clicks); switching on cancels a pending unlink. */
+    const linked = new Set();
+    const link = g => {
+      if (g._t) { clearTimeout(g._t); g._t = null; }
+      if (!linked.has(g)) { g.connect(lvl); linked.add(g); }
+    };
+    const unlink = g => {
+      if (!linked.has(g) || g._t) return;
+      g._t = setTimeout(() => { g._t = null; try { g.disconnect(lvl); } catch (e) {} linked.delete(g); }, 80);
+    };
+    /** The sub is audible if its knob is up OR a cable modulates its level. */
+    const subGate = () => {
+      const p = m.params.sub;
+      if (p && (p.value > 1e-4 || p.conns.length)) link(gS); else unlink(gS);
+    };
 
     /* linear FM input (depth set by the FM Amt knob) */
     const fm = m.node(AC.createGain()); fm.gain.value = 0; fm.connect(o.frequency);
@@ -3017,8 +3168,8 @@ DEFS.osc = {
 
     m.knobs([
       { k:'knob', id:'sub', label:'Sub', min:0, max:1, def:0, curve:'pow2', unit:'%',
-        mod:{ targets:[gS.gain], scale:1 },
-        set: v => setAP(gS.gain, v * .8, .02) },
+        mod:{ targets:[gS.gain], scale:1 }, onMod: () => subGate(),
+        set: v => { setAP(gS.gain, v * .8, .02); subGate(); } },
 
       { k:'knob', id:'subo', label:'SubOct', min:1, max:2, def:1, step:1, curve:'lin',
         fmt: v => '-' + v.toFixed(0), nornd:1, set: pitch },
@@ -3040,8 +3191,8 @@ DEFS.osc = {
     row.appendChild(m.param({
       k:'select', id:'wave', label:'Wave', opts:waves, def:'saw',
       set: v => {
-        const on = (g, x) => setAP(g.gain, x, .01);
-        on(gO, 0); on(gP, 0); on(gW, 0); on(gPk, 0);
+        const lv = new Map([[gO, 0], [gP, 0], [gW, 0], [gPk, 0]]);
+        const on = (g, x) => lv.set(g, x);
 
         if (v === 'white')        on(gW, .55);
         else if (v === 'pink')    on(gPk, .8);
@@ -3049,6 +3200,10 @@ DEFS.osc = {
         else if (['sine','triangle','square'].includes(v)) { o.type = v; on(gO, 1); }
         else if (v === 'saw')   { o.type = 'sawtooth'; on(gO, 1); }
         else { if (WT[v]) o.setPeriodicWave(WT[v]); on(gO, 1); }   // wavetables
+        for (const [g, x] of lv) {                                   // fade, then (un)link
+          setAP(g.gain, x, .01);
+          x > 0 ? link(g) : unlink(g);
+        }
       }
     }));
     m.ctrls.appendChild(row);
@@ -3120,9 +3275,9 @@ DEFS.osc = {
       const f   = m.node(AC.createBiquadFilter()); f.type = 'lowpass';
       const amp = m.node(AC.createGain());         amp.gain.value = 0;
       o1.connect(mix); o2.connect(g2); g2.connect(mix);
-      mix.connect(f); f.connect(amp); amp.connect(out);
+      mix.connect(f); f.connect(amp);        // amp → out only while the voice sounds (see PARKING)
       o1.start(); o2.start();
-      vs.push({ o1, o2, g2, f, amp,
+      vs.push({ o1, o2, g2, f, amp, live: false, parkAt: 0,
                 note: 60, t0: 0, held: false, busyUntil: 0, env: null, fenv: null, rel: null });
     }
 
@@ -3152,6 +3307,7 @@ DEFS.osc = {
       v.rel = { t: tr, L: level(v.env, tr), r: S.r };
       v.held = false;
       v.busyUntil = tr + S.r * 1.25 + .02;
+      v.parkAt    = tr + S.r * 2 + .05;          // tail is < -70 dB by then
     }
 
     /* ===== BLOCK: PITCH + FILTER HELPERS ===== */
@@ -3184,6 +3340,7 @@ DEFS.osc = {
     function noteOn(t, vel, dur, note) {
       if (note == null || !isFinite(note)) note = 60;
       const { v, stolen } = pick(t);
+      wake(v);
       let ts = t;
       if (stolen) {                                               // quick fade, then restart
         v.amp.gain.cancelScheduledValues(t);
@@ -3206,6 +3363,7 @@ DEFS.osc = {
       startEnv(v.amp.gain, ts, P);
       startEnv(v.f.detune, ts, v.fenv.P);
       v.busyUntil = Infinity;                                     // until released
+      v.parkAt    = Infinity;
       if (dur != null) release(v, Math.max(ts + .01, t + dur));   // timed note releases itself
     }
     function noteOff(t, note) {
@@ -3213,6 +3371,23 @@ DEFS.osc = {
       for (const v of vs) if (v.held && v.note === note && (!best || v.t0 < best.t0)) best = v;
       if (best) release(best, Math.max(t, best.t0 + .01));
     }
+
+    /* ===== BLOCK: VOICE PARKING (CPU) =====
+       Web Audio renders every node that is pulled by the destination, even when its
+       gain is 0. A silent voice is therefore disconnected from `out`: its oscillators
+       and filter are no longer pulled and cost nothing. wake() reconnects it at note
+       time (amp gain is 0 then, so there is no click); the scheduler tick parks voices
+       whose release tail has fully decayed. Idle POLY cost: ~7 % of a core → ~0. */
+    function wake(v) { if (!v.live) { v.amp.connect(out); v.live = true; } }
+    function park(v) { if (v.live) { try { v.amp.disconnect(out); } catch (e) {} v.live = false; } }
+    m.sched = t => { for (const v of vs) if (v.live && !v.held && t > v.parkAt) park(v); };
+    m.liveVoices = () => vs.reduce((a, v) => a + (v.live ? 1 : 0), 0);
+    m.cancelAfter = t => {                                        // transport stop / seek
+      for (const v of vs) if (v.t0 > t && v.busyUntil !== 0) {   // note scheduled but not started yet
+        v.amp.gain.cancelScheduledValues(t); v.amp.gain.setValueAtTime(0, t);
+        v.held = false; v.busyUntil = 0; v.parkAt = t; v.env = null;
+      }
+    };
 
     /* ===== BLOCK: JACKS ===== */
     m.addIn({ id: 'notes', label: 'Notes', kind: 'trig', onTrig: noteOn, onRel: noteOff });
@@ -3378,6 +3553,7 @@ DEFS.drum = {
       ga.gain.exponentialRampToValueAtTime(.0008, t + dur);
       s.connect(bq).connect(ga).connect(dest);
       s.start(t, rnd(2)); s.stop(t + dur + .02);
+      if (curHit) curHit.srcs.push(s);
     }
 
     /** pitched tone with an optional pitch sweep from f0 to f1 over `bend` s */
@@ -3391,11 +3567,26 @@ DEFS.drum = {
       ga.gain.exponentialRampToValueAtTime(.0008, t + dur);
       o.connect(ga).connect(dest);
       o.start(t); o.stop(t + dur + .02);
+      if (curHit) curHit.srcs.push(o);
     }
 
     /** Play one hit at audio time t with velocity v (0..1.3). */
+    /* hits scheduled ahead of the audio clock: [{t, srcs}] — cancelled on Stop/seek */
+    let hits = [], curHit = null;
+    m.cancelAfter = tc => {
+      hits = hits.filter(h => {
+        if (h.t <= tc) return true;
+        h.srcs.forEach(s => { try { s.stop(tc); } catch (e) {} });   // stop before start = silent
+        return false;
+      });
+    };
+
     function hit(t, v) {
       v = clamp(v, 0, 1.3);
+      const tNow = now();
+      if (hits.length > 16) hits = hits.filter(h => h.t > tNow - .1); // forget hits already playing
+      curHit = { t, srcs: [] };
+      hits.push(curHit);
 
       const q = {};                               // snapshot of all knob values
       m.plist.forEach(p => (q[p.id] = p.effective()));
@@ -3463,6 +3654,7 @@ DEFS.drum = {
           break;
         }
       }
+      curHit = null;
     }
 
     m.trigNow = hit;
@@ -3526,7 +3718,8 @@ DEFS.filter = {
     inn.connect(pre).connect(shp).connect(post);
     post.connect(b1);
     b1.connect(g12);
-    b1.connect(b2); b2.connect(g24);
+    b2.connect(g24);                 // b1 → b2 is linked only in 24 dB mode (CPU, see slope toggle)
+    let b2on = false, b2t = null;
     g12.connect(wet); g24.connect(wet); wet.connect(out);
     inn.connect(dry); dry.connect(out);
 
@@ -3546,7 +3739,13 @@ DEFS.filter = {
     }));
     row.appendChild(m.param({
       k:'toggle', id:'slope', label:'24dB', def:0,
-      set: v => { setAP(g24.gain, v ? 1 : 0, .01); setAP(g12.gain, v ? 0 : 1, .01); }
+      set: v => {
+        setAP(g24.gain, v ? 1 : 0, .01); setAP(g12.gain, v ? 0 : 1, .01);
+        clearTimeout(b2t); b2t = null;
+        if (v && !b2on) { b1.connect(b2); b2on = true; }                 // 24 dB: second stage renders
+        else if (!v && b2on) b2t = setTimeout(() => {                    // 12 dB: unplug after the fade
+          b2t = null; try { b1.disconnect(b2); } catch (e) {} b2on = false; }, 80);
+      }
     }));
     m.ctrls.appendChild(row);
 
@@ -3799,7 +3998,18 @@ DEFS.echo = {
     /* internal wobble LFO modulating both delay times (tape flutter / chorus) */
     const lfo = m.node(AC.createOscillator()); lfo.frequency.value = .3;
     const lg  = m.node(AC.createGain());       lg.gain.value = 0;
-    lfo.connect(lg); lg.connect(dl.delayTime); lg.connect(dr.delayTime);
+    lfo.connect(lg);
+    /* CPU: while Wobble is 0 (and unmodulated) the LFO is unplugged from the delay
+       times, so the delay lines run their cheap k-rate path and the LFO isn't rendered. */
+    let wobOn = false;
+    const wobGate = () => {
+      const p = m.params.wob;
+      const on = !!p && (p.value > 1e-4 || p.conns.length > 0);
+      if (on === wobOn) return;
+      wobOn = on;
+      if (on) { lg.connect(dl.delayTime); lg.connect(dr.delayTime); }
+      else    { try { lg.disconnect(); } catch (e) {} }
+    };
     lfo.start();
 
     const ana = AC.createAnalyser(); ana.fftSize = 256; wet.connect(ana);
@@ -3851,8 +4061,8 @@ DEFS.echo = {
         set: v => setAP(hp.frequency, v, .03) },
 
       { k:'knob', id:'wob', label:'Wobble', min:0, max:1, def:0, curve:'pow2', unit:'%',
-        mod:{ targets:[lg.gain], scale:.01 },
-        set: v => setAP(lg.gain, v * .004, .05) },
+        mod:{ targets:[lg.gain], scale:.01 }, onMod: () => wobGate(),
+        set: v => { setAP(lg.gain, v * .004, .05); wobGate(); } },
 
       { k:'knob', id:'wrate', label:'W.Rate', min:.05, max:8, def:.4, curve:'exp', unit:'Hz',
         mod:{ targets:[lfo.frequency], scale:4 },
@@ -4114,7 +4324,17 @@ DEFS.env = {
      * @param {number} v   velocity 0..1
      * @param {number|null} dur  gate length; null = hold until rel() is called
      */
+    let lastFire = 0;                          // start time of the latest scheduled trigger
+    m.cancelAfter = tc => {
+      if (m.params.loop.value || lastFire <= tc) return;   // loop mode is free-running
+      const q = {}; m.plist.forEach(p => (q[p.id] = p.effective()));
+      cah(cs.offset, tc);
+      ramp(cs.offset, 0, tc, q.r, q.curve);
+      lastFire = 0;
+    };
+
     function fire(t, v, dur) {
+      lastFire = Math.max(lastFire, t);
       const q = {};
       m.plist.forEach(p => (q[p.id] = p.effective()));
 
@@ -4236,10 +4456,20 @@ DEFS.lfo = {
     const bias = m.node(AC.createConstantSource()); bias.offset.value = 0; bias.start();
     const out  = m.node(AC.createGain());
 
-    oscGain.connect(smooth);
-    rndGain.connect(smooth);
-    smooth.connect(dep).connect(out);
+    dep.connect(out);
     bias.connect(out);
+
+    /* ---- ROUTING (CPU): only the active engine is connected, and the Smooth
+       low-pass is bypassed while it is off, so an idle branch is never rendered. */
+    const route = { src: null, smooth: null };
+    function reroute(periodic, smoothOn) {
+      const src = periodic ? oscGain : rndGain;
+      if (route.src === src && route.smooth === smoothOn) return;
+      [oscGain, rndGain, smooth].forEach(n => { try { n.disconnect(); } catch (e) {} });
+      if (smoothOn) { src.connect(smooth); smooth.connect(dep); } else src.connect(dep);
+      route.src = src; route.smooth = smoothOn;
+    }
+    const smoothOn = () => !!(m.params.sm && (m.params.sm.effective() >= .003 || m.params.sm.conns.length));
 
     const oj = m.addOut({ id:'out', label:'LFO', kind:'sig', node: out });
     mkTap(oj);                                        // always tapped: mod source
@@ -4297,6 +4527,7 @@ DEFS.lfo = {
         osc.start(t || now());
 
         setAP(oscGain.gain, 1, .005);
+        reroute(true, smoothOn());
         setAP(rndGain.gain, 0, .005);
         if (rp) rewireParam(rp, [osc.detune]);        // exponential rate mod
       } else {
@@ -4308,6 +4539,7 @@ DEFS.lfo = {
         }
         setAP(oscGain.gain, 0, .005);
         setAP(rndGain.gain, 1, .005);
+        reroute(false, smoothOn());
         if (rp) rewireParam(rp, []);                  // control-rate instead
       }
     }
@@ -4339,7 +4571,9 @@ DEFS.lfo = {
 
       { k:'knob', id:'sm',   label:'Smooth', min:0, max:1, def:0, curve:'pow2', unit:'%',
         mod:{ scale:.5 },
-        set: v => setAP(smooth.frequency, v < .003 ? 20000 : lerp(40, .4, Math.pow(v, .5)), .02) }
+        onMod: () => reroute(route.src === oscGain, smoothOn()),
+        set: v => { setAP(smooth.frequency, v < .003 ? 20000 : lerp(40, .4, Math.pow(v, .5)), .02);
+                    if (route.src) reroute(route.src === oscGain, smoothOn()); } }
     ]);
 
     m.ready = 1;            // guard so the Wave selector doesn't remake too early
@@ -4677,6 +4911,10 @@ DEFS.seq = {
       }
     };
     m.reset = t => m.locate(0, t);
+    m.cancelAfter = tc => {
+      st.q = st.q.filter(e => e.t <= tc);
+      [cvP.offset, cvV.offset].forEach(p => m.ctx.cah(p, tc));
+    };
     m.sched = (t, ahead) => {
       drainQ();
       if (!transport.playing) return;
@@ -5186,8 +5424,10 @@ DEFS.out = {
     const wl  = m.node(AC.createGain());                       // limited path
 
     inn.connect(g).connect(p);
-    const oc = mkSoftClip(AC); m.node(oc.input); m.node(oc.output);   // compressor + ceiling = real limiter
-    p.connect(lim).connect(oc.input); oc.output.connect(wl);
+    const oc = mkSoftClip(AC, 'none');                                // compressor + ceiling = real limiter
+    m.node(oc.input); m.node(oc.output);                               // (master clipper oversamples; one is enough)
+    lim.connect(oc.input); oc.output.connect(wl);   // p → lim is linked only while Limiter is on
+    let limOn = false, limT = null;
     p.connect(byp);
     wl.connect(BUS);
     byp.connect(BUS);
@@ -5209,7 +5449,12 @@ DEFS.out = {
     const row = h('div', 'row');
     row.appendChild(m.param({
       k:'toggle', id:'lim', label:'Limiter', def:1,
-      set: v => { setAP(wl.gain, v ? 1 : 0, .02); setAP(byp.gain, v ? 0 : 1, .02); }
+      set: v => {
+        setAP(wl.gain, v ? 1 : 0, .02); setAP(byp.gain, v ? 0 : 1, .02);
+        clearTimeout(limT); limT = null;
+        if (v && !limOn) { p.connect(lim); limOn = true; }             // CPU: compressor only when used
+        else if (!v && limOn) limT = setTimeout(() => { limT = null; try { p.disconnect(lim); } catch (e) {} limOn = false; }, 120);
+      }
     }));
     m.ctrls.appendChild(row);
 
@@ -5403,6 +5648,8 @@ ORDER.forEach(type => {
  * the workload.
  * ==========================================================================*/
 let lastT = 0, lastDpr = devicePixelRatio;
+/** Visual frame budget (ms of drawing per animation frame) + stats for the perf panel. */
+const UI = { budget: 6, cursor: 0, drawn: 0, visible: 0, frameMs: 0 };
 /** Resize every module canvas backing store to the current devicePixelRatio.
     Modules with extra canvases (SCOPE's offscreen trail) implement m.onDpr(). */
 function rescaleCanvases() {
@@ -5424,20 +5671,33 @@ function frame(t) {
   lastT = t;
   /* 0 · moved to another monitor / browser zoom changed → re-rasterise canvases */
   if (devicePixelRatio !== lastDpr) { lastDpr = devicePixelRatio; rescaleCanvases(); }
-  /* 1 · taps + control-rate modulation */
-  pumpControl();
-  /* 2 · draw modules that are actually on screen */
+  const f0 = performance.now();
+  /* 1 · taps + control-rate modulation run on the scheduler tick (SECTION 10.1),
+         not here: the rAF loop is purely visual and can be throttled freely. */
+  /* 2 · draw modules that are actually on screen — within a time BUDGET.
+         Visible modules are served round-robin from a rotating cursor; when the
+         budget is spent the rest keep last frame's pixels and go first next frame.
+         Visual cost therefore stays bounded however large the rack grows, which
+         keeps the main thread free for the event scheduler. */
   const r = stage.getBoundingClientRect();
+  const vis = [];
   for (const m of modules) {
     const x = m.x * view.z + view.x;
     const y = m.y * view.z + view.y;
-    const visible = x < r.width + 60 && y < r.height + 60 &&
-                    x + m.w * view.z > -60 && y + m.hh * view.z > -60 &&
-                    !m.el.classList.contains('col');
-    if (!visible) continue;
+    if (x < r.width + 60 && y < r.height + 60 &&
+        x + m.w * view.z > -60 && y + m.hh * view.z > -60 &&
+        !m.el.classList.contains('col')) vis.push(m);
+  }
+  let drawn = 0;
+  for (let k = 0; k < vis.length; k++) {
+    const m = vis[(UI.cursor + k) % vis.length];
     if (m.draw) { try { m.draw(t); } catch (e) { /* never kill the loop */ } }
     for (const p of m.plist) if (p.conns.length) p.render();
+    drawn++;
+    if (performance.now() - f0 > UI.budget) break;
   }
+  UI.cursor = vis.length ? (UI.cursor + drawn) % vis.length : 0;
+  UI.drawn = drawn; UI.visible = vis.length;
   /* 3 · cables */
   if (wiresDirty) layoutWires();
   /* 4 · master meter (buffer reused: no per-frame allocation) */
@@ -5451,6 +5711,8 @@ function frame(t) {
   /* 5 · transport readout + song panel */
   posEl.textContent = fmtPos(transport.beatAt());
   songUI.tick();
+  perfUI.tick();
+  UI.frameMs += ((performance.now() - f0) - UI.frameMs) * .1;     // EWMA for the perf panel
 }
 requestAnimationFrame(frame);
 
@@ -6526,6 +6788,7 @@ $('#midi').onclick    = () => noteInput.enableMidi();
 $('#learn').onclick   = () => noteInput.setLearn(!noteInput.learn);
 $('#songbtn').onclick = () => songUI.toggle();
 $('#bounce').onclick  = () => exportUI.open();
+$('#perfbtn').onclick = () => perfUI.toggle();
 
 
 
@@ -6537,6 +6800,7 @@ function closeAllPanels() {
   $('#libov').classList.add('hide'); $('#helpov').classList.add('hide');
   exportUI.close();                                    // refuses while a render is running
   songUI.close();
+  perfUI.close();
   if (noteInput.qwerty) noteInput.setQwerty(false);
   if (noteInput.learn)  noteInput.setLearn(false);
   if (document.activeElement && isTextTarget(document.activeElement)) document.activeElement.blur();
@@ -6569,6 +6833,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'h') $('#helpov').classList.toggle('hide');
   else if (k === 'l') $('#plib').click();
   else if (k === 's') songUI.toggle();
+  else if (k === 'p') perfUI.toggle();
   else if (k === 'k') noteInput.setQwerty(true);       // (when piano keys are on, K plays a note instead)
   else if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selConn) disconnect(selConn);
@@ -7153,6 +7418,156 @@ const exportUI = (() => {
 
 
 /* =============================================================================
+ * 22 · ENGINE PERFORMANCE (measurement + panel)
+ * -----------------------------------------------------------------------------
+ * Two budgets decide whether the app plays cleanly:
+ *   1. AUDIO THREAD — every node pulled by the destination is rendered every
+ *      128 frames. If the graph needs more than the real-time budget, audio drops
+ *      out. measureDsp() renders a copy of the rack offline and reports the CPU
+ *      time needed per second of audio ("% of one core"). < 50 % = comfortable.
+ *   2. MAIN THREAD — events are created SCHED.look ahead; a main-thread stall
+ *      longer than that makes notes late. The panel shows tick jitter, the
+ *      adaptive look-ahead, late windows and the UI frame budget.
+ * Glitch counters come from AudioContext.playoutStats where the browser has it.
+ * ==========================================================================*/
+/**
+ * Measure the DSP cost of the current rack: render `secs` of it offline (with
+ * the real control/scheduler ticks) and time it. Live audio is paused meanwhile
+ * so the measurement doesn't compete with it.
+ * @returns {Promise<{load:number, wallMs:number, secs:number}>}  load = CPU s per audio s
+ */
+async function measureDsp(secs = 2) {
+  const patch = serialize(), sr = AC ? AC.sampleRate : 48000;
+  const off = new OfflineAudioContext(2, Math.round(secs * sr), sr);
+  const eng = createEngine(off);
+  await eng.init({ workletSrc: WORKLET_SRC });
+  wireTransport(eng);
+  eng.transport.setTempo(patch.bpm);
+  eng.masterGain.gain.value = +$('#mvol').value;
+  const wasRunning = AC && AC.state === 'running';
+  let wall = 0;
+  try {
+    if (wasRunning) await AC.suspend();
+    await withHeadlessRack(eng, async () => {
+      history.mute(() => importFragment(patch, { keepIds: true }));
+      await new Promise(r => setTimeout(r, 250));                  // debounced IR builds
+      eng.transport.loop = null;
+      eng.transport.play(0, 0);
+      const STEP = 4096, n = Math.floor(off.length / STEP);
+      let hook = 0;
+      const tick = t => { pumpControl(); pumpSched(t, t + LOOK); };
+      tick(0);
+      for (let k = 1; k < n; k++) {
+        const t = k * STEP / sr;
+        off.suspend(t).then(() => {
+          const h0 = performance.now();
+          try { tick(t); } finally { hook += performance.now() - h0; off.resume(); }
+        });
+      }
+      const t0 = performance.now();
+      await off.startRendering();
+      wall = performance.now() - t0 - hook;                        // DSP time only
+    });
+  } finally { if (wasRunning) AC.resume(); }
+  return { load: wall / 1000 / secs, wallMs: Math.round(wall), secs };
+}
+
+const perfUI = (() => {
+  const root = h('div'); root.id = 'perf';
+  stage.appendChild(root);
+  ['pointerdown', 'wheel', 'dblclick'].forEach(ev => root.addEventListener(ev, e => e.stopPropagation()));
+  const body = h('div'); root.appendChild(body);
+  let dsp = null, busy = false, lastDraw = 0;
+
+  /* ---- controls (built once) ---- */
+  const row = h('div', 'prow');
+  const bMeasure = h('button', null, 'measure DSP');
+  bMeasure.title = 'render 2 s of this rack offline and time it (live audio pauses briefly)';
+  bMeasure.onclick = async () => {
+    if (busy || !AC) return;
+    busy = true; bMeasure.disabled = true; bMeasure.textContent = 'measuring…';
+    try { dsp = await measureDsp(2); } catch (e) { console.error(e); toast('measurement failed'); }
+    busy = false; bMeasure.disabled = false; bMeasure.textContent = 'measure DSP'; lastDraw = 0;
+  };
+  const selLat = h('select');
+  [['interactive', 'latency: low'], ['balanced', 'latency: balanced'], ['playback', 'latency: safe']]
+    .forEach(([v, t]) => { const o = h('option'); o.value = v; o.textContent = t; selLat.appendChild(o); });
+  selLat.value = latencyPref();
+  selLat.title = 'output buffer size — bigger = more headroom against dropouts, more delay';
+  selLat.onchange = () => {
+    try { localStorage.setItem(LAT_KEY, selLat.value); } catch (e) {}
+    if (!confirm('The buffer size is set when audio starts. Reload now? Your rack is saved and offered on the start screen.')) {
+      toast('latency mode applies on next start'); return;
+    }
+    try {
+      localStorage.setItem(SESS_KEY, JSON.stringify(patchBlob(curPatch || 'session')));
+      sessionStorage.setItem('mod_resume', '1');
+    } catch (e) {}
+    location.reload();
+  };
+  const bReset = h('button', null, 'reset stats');
+  bReset.onclick = () => { SCHED.late = 0; SCHED.lateMs = 0; SCHED.gaps.fill(0); lastDraw = 0; };
+  row.append(bMeasure, selLat, bReset);
+  const hint = h('div', 'hint',
+    'DSP % = CPU time the audio graph needs per second of sound on this machine (one core). ' +
+    'Keep it under ~50 % for headroom. Big savers: fewer REVERBs (use one on a mixer send), ' +
+    'fewer POLY voices, collapse modules you are not watching.');
+  root.append(row, hint);
+
+  const cls = (v, a, b) => v < a ? 'ok' : v < b ? 'warn' : 'bad';
+  const line = (k, v, c) => `<div class="pr"><span class="pk">${k}</span><span class="${c || ''}">${v}</span></div>`;
+
+  function render() {
+    const g = [...SCHED.gaps].filter(x => x > 0).sort((a, b) => a - b);
+    const p95 = g.length ? g[Math.floor(g.length * .95)] * 1000 : 0, worst = g.length ? g[g.length - 1] * 1000 : 0;
+    const nodes = modules.reduce((a, m) => a + m.nodes.length, 0);
+    const polyLive = modules.filter(m => m.type === 'poly').reduce((a, m) => a + (m.liveVoices ? m.liveVoices() : 0), 0);
+    const ps = AC && AC.playoutStats;
+    const glitch = ps && (ps.fallbackFramesEvents ?? ps.fallbackEvents);
+    let html = '<h4>audio thread</h4>';
+    html += line('DSP load (measured)', dsp ? (dsp.load * 100).toFixed(0) + ' % of a core' : 'press “measure DSP”',
+                 dsp ? cls(dsp.load, .5, .8) : '');
+    html += line('glitches (browser)', glitch != null ? glitch + (ps.fallbackDuration != null ? ' · ' + (+ps.fallbackDuration).toFixed(0) + ' ms' : '') : 'not reported by this browser',
+                 glitch ? 'bad' : glitch === 0 ? 'ok' : '');
+    html += line('sample rate', AC ? (AC.sampleRate / 1000).toFixed(1) + ' kHz' : '—');
+    html += line('latency', AC ? latencyPref() + ' · ' + ((AC.baseLatency || 0) * 1000).toFixed(1) + ' + ' +
+                 ((AC.outputLatency || 0) * 1000).toFixed(1) + ' ms' : '—');
+    html += '<h4>event scheduler</h4>';
+    html += line('clock', SCHED.clock + ' · every ' + SCHED.interval + ' ms');
+    html += line('look-ahead (adaptive)', (SCHED.look * 1000).toFixed(0) + ' ms');
+    html += line('tick gap p95 / worst', p95.toFixed(0) + ' / ' + worst.toFixed(0) + ' ms', cls(worst / 1000, SCHED.look * .6, SCHED.look));
+    html += line('late windows', SCHED.late + (SCHED.late ? ' · ' + SCHED.lateMs.toFixed(0) + ' ms' : ''), SCHED.late ? 'bad' : 'ok');
+    html += line('tick work (avg)', (SCHED.ticks ? SCHED.work / SCHED.ticks : 0).toFixed(2) + ' ms');
+    html += '<h4>ui</h4>';
+    html += line('frame work (avg)', UI.frameMs.toFixed(1) + ' ms · budget ' + UI.budget + ' ms', cls(UI.frameMs, UI.budget * .8, UI.budget * 1.5));
+    html += line('modules drawn / visible', UI.drawn + ' / ' + UI.visible);
+    html += '<h4>graph</h4>';
+    html += line('modules · cables', modules.length + ' · ' + conns.length);
+    html += line('audio nodes (persistent)', nodes);
+    html += line('control-rate params · taps', liveParams.size + ' · ' + tapped.size);
+    if (modules.some(m => m.type === 'poly')) html += line('POLY voices rendering', polyLive);
+    body.innerHTML = html;                    // only numbers and fixed labels: no user data here
+  }
+  function toggle() {
+    const open = root.classList.toggle('open');
+    $('#perfbtn').classList.toggle('on', open);
+    lastDraw = 0;
+  }
+  function tick() {
+    if (!root.classList.contains('open')) return;
+    const t = performance.now();
+    if (t - lastDraw < 250) return;           // 4 Hz is plenty for numbers
+    lastDraw = t; render();
+  }
+  function close() { if (root.classList.contains('open')) toggle(); }
+  return { toggle, tick, close };
+})();
+
+/** Console access for profiling: MODULAR.perf.measureDsp(), .SCHED, .UI */
+window.MODULAR = { perf: { measureDsp, SCHED, UI } };
+
+
+/* =============================================================================
  * 18 · BOOT
  * -----------------------------------------------------------------------------
  * Called from a splash-screen button (a user gesture is required before audio
@@ -7167,7 +7582,11 @@ async function boot(which) {
   refreshPresets();
   $('#splash').classList.add('hide');
 
-  if (which === 'shared' && sharedPatch) {
+  if (which === 'session') {                       // "continue where you left off" (after a latency change)
+    try { curPatch = null; deserialize(JSON.parse(localStorage.getItem(SESS_KEY))); }
+    catch (e) { console.error(e); toast('session could not be restored'); loadBuiltin('init'); which = 'init'; }
+  }
+  else if (which === 'shared' && sharedPatch) {
     curPatch = null;
     try { deserialize(sharedPatch); }
     catch (e) { console.error(e); toast('shared patch could not be loaded: ' + e.message); loadBuiltin('init'); which = 'init'; }
@@ -7194,6 +7613,16 @@ let sharedPatch = null;
   b.onclick = () => boot('shared');
   $('#splash .big').prepend(b);
 })();
+/* ---- reloaded to apply a new latency mode: offer to continue the saved rack ---- */
+try {
+  if (sessionStorage.getItem('mod_resume') && localStorage.getItem(SESS_KEY)) {
+    sessionStorage.removeItem('mod_resume');
+    const b = h('button', null, '⟲ Continue where you left off');
+    b.dataset.p = 'session';
+    b.style.cssText = 'border-color:var(--acc);box-shadow:0 0 14px rgba(34,211,238,.35)';
+    $('#splash .big').prepend(b);
+  }
+} catch (e) { /* storage unavailable */ }
 document.querySelectorAll('#splash [data-p]').forEach(b => (b.onclick = () => boot(b.dataset.p)));
 showInsp();
 </script>
