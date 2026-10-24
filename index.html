@@ -34,7 +34,8 @@
   SIGNAL CONVENTIONS (important!)
   -------------------------------
     * 'sig'  jacks carry audio or CV. CV is normalised to roughly -1 .. +1.
-    * 'trig' jacks carry events: onTrig(time, velocity, gateLengthSeconds).
+    * 'trig' jacks carry events: onTrig(time, velocity, gateSeconds|null, midiNote)
+      plus optional onRel(time, note) for held notes (gateSeconds === null).
     * Pitch CV: 1.0 == +48 semitones (4 octaves). A Sequencer "Pitch" output into
       an Oscillator "Pitch" knob at depth 1.00 therefore tracks exactly 1:1.
     * Exponential destinations (osc pitch, filter cutoff, delay tone ...) are
@@ -624,15 +625,28 @@ button.bk.pend{animation:rblink .6s infinite}
       <li>Canvas: drag to pan, wheel to zoom. Palette icons can be clicked or dragged in.</li>
       <li>Sequencer: pick a lane (ON/PITCH/VEL/GATE/PROB/RATCH/SLIDE) then drag across the grid.
           <kbd>Shift</kbd>+drag mutes steps.</li>
-          <li>Select: click a header, <kbd>Shift</kbd>/<kbd>Ctrl</kbd>+click to add, <kbd>Shift</kbd>+drag on the canvas
-            for a marquee, <kbd>Ctrl+A</kbd> for all. Drag any selected header to move the group.</li>
-        <li>Edit: <kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo · <kbd>Ctrl+C/X/V</kbd> copy/cut/paste
-            (works across tabs) · <kbd>Ctrl+D</kbd> duplicate · <kbd>Ctrl+Shift+D</kbd> duplicate <i>with cables</i>
-            <li>Play: <kbd>K</kbd> piano keys (<kbd>Z</kbd>/<kbd>X</kbd> octave) · <b>MIDI</b> button for a controller ·
-              <b>learn</b> then click a knob and move a CC · SEQ <b>● rec</b> records what you play.</li>
-          <li>Song: <kbd>S</kbd> opens the arranger. Patterns A–H per SEQ; click a letter to switch at loop end
-              (<kbd>Shift</kbd> = now). <b>bounce</b> renders audio faster than real time (optional stems).</li>
-            (Shift+click ⧉ does the same).</li>
+      <li>Select: click a header, <kbd>Shift</kbd>/<kbd>Ctrl</kbd>+click to add, <kbd>Shift</kbd>+drag on the canvas
+          for a marquee, <kbd>Ctrl+A</kbd> for all. Drag any selected header to move the group.</li>
+    </ul>
+
+    <h3>editing</h3>
+    <ul>
+      <li><kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Shift+Z</kbd> redo · <kbd>Ctrl+C/X/V</kbd> copy/cut/paste
+          (works across tabs) · <kbd>Ctrl+D</kbd> duplicate · <kbd>Ctrl+Shift+D</kbd> duplicate <i>with cables</i>
+          (<kbd>Shift</kbd>+click <kbd>⧉</kbd> does the same).</li>
+      <li>A cable that closes a feedback loop gets a tiny (~3 ms) delay automatically, so loops
+          behave the same in every browser.</li>
+    </ul>
+
+    <h3>playing &amp; song</h3>
+    <ul>
+      <li>Play: <kbd>K</kbd> piano keys (<kbd>Z</kbd>/<kbd>X</kbd> octave) · <b>MIDI</b> button for a controller ·
+          <b>learn</b> then click a knob and move a CC · SEQ <b>● rec</b> records what you play
+          (QWERTY, MIDI or a KEYS module's on-screen keys).</li>
+      <li>Song: <kbd>S</kbd> opens the arranger. Patterns A–H per SEQ; click a letter to switch at loop end
+          (<kbd>Shift</kbd> = now). <b>bounce</b> renders audio faster than real time (optional stems).</li>
+      <li>● record: with <b>bars</b> = N the take starts on the next bar line (or with the transport,
+          if stopped) and is exactly N bars long.</li>
     </ul>
 
     <div class="big"><button id="helpclose">close</button></div>
@@ -649,20 +663,26 @@ button.bk.pend{animation:rblink .6s infinite}
  *                                bit-crusher AudioWorklet source
  *   3  · MUSIC THEORY & CLOCK    note names, scales, clock divisions, transport
  *   4  · PARAMETER SYSTEM        curves, formatting, class P, knob/select/toggle
- *   5  · PATCH STATE & VIEW      module/connection registries, pan+zoom
- *   6  · MODULE FACTORY          addModule(), the module "shell" + helper API
- *   7  · JACKS, CABLES, ROUTING  connect/disconnect, SVG cable rendering
+ *   5  · PATCH STATE & VIEW      module/connection registries, transport wiring,
+ *                                rack context, pan+zoom, 5.5 undo/redo history
+ *   6  · MODULE FACTORY          addModule(), the module "shell" + helper API,
+ *                                6.5 selection + group drag
+ *   7  · JACKS, CABLES, ROUTING  connect/disconnect, feedback-loop guard, SVG
+ *                                cables, trigger/note protocol
  *   8  · INSPECTOR BAR           bottom status / cable editor
- *   9  · STAGE NAVIGATION        pan, zoom, fit
- *  10  · SCHEDULER               look-ahead event clock
- *  11  · MODULE DEFINITIONS      DEFS.osc, .drum, .filter, ... (the instruments)
+ *   9  · STAGE NAVIGATION        pan, zoom, fit · 9.5 clipboard · 9.6 duplicate
+ *  10  · SCHEDULER               22 ms look-ahead clock + control-rate CV
+ *  11  · MODULE DEFINITIONS      DEFS.osc, .poly, .drum, .filter, ... .keys
  *  12  · PALETTE                 left-hand "add module" buttons
- *  13  · RENDER LOOP             one rAF loop drives all visuals + control-rate CV
- *  14  · PRESETS & SERIALISATION built-in racks, save/load to JSON
- *  15  · PATCH LIBRARY           localStorage library UI
- *  16  · RECORDER                master tap → 16-bit WAV download
+ *  13  · RENDER LOOP             one rAF loop drives all visuals
+ *  14  · PRESETS & SERIALISATION fragments, schema/migrations, built-in racks
+ *  15  · PATCH LIBRARY           localStorage library UI · 15.5 share links
+ *  16  · RECORDER                real-time master capture → bar-aligned WAV
  *  17  · TOOLBAR & KEYBOARD      global controls and shortcuts
- *  18  · BOOT                    async startup from the splash screen
+ *  18  · BOOT                    AudioContext creation + startup from the splash
+ *  19  · NOTE INPUT HUB          QWERTY piano, Web MIDI, MIDI learn
+ *  20  · SONG                    arrangement model + arranger panel
+ *  21  · OFFLINE RENDER          bounce, stems, WAV/ZIP encoders, export dialog
  *
  *  HOW TO ADD A NEW MODULE (the short version)
  *  -------------------------------------------
@@ -779,67 +799,97 @@ function mkSoftClip(ac) {
 }
  function createEngine(ac) {
   const engine = {
-    ac,
-    sampleRate: ac.sampleRate,
-    now: () => ac.currentTime,
+    ac: null,                        // set by attach(): the live app attaches on the first click
+    sampleRate: 0,
+    now: () => (engine.ac ? engine.ac.currentTime : 0),
     noise: { white: null, pink: null },
     waves: {},
     hasWorklet: false,
-    transport: null
+    transport: null,
+    bus: null, masterGain: null, masterAna: null
   };
   /* AudioParam helpers (click-free move / cancel-and-hold) */
   engine.setAP = (p, v, t) => {
     if (!p) return;
-    try { p.setTargetAtTime(v, ac.currentTime, t || 0.012); }
+    try { p.setTargetAtTime(v, engine.ac.currentTime, t || 0.012); }
     catch (e) { p.value = v; }
   };
   engine.cah = (p, t) => {
     try { if (p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(t); else p.cancelScheduledValues(t); }
     catch (e) { /* ignore */ }
   };
-  /* master chain */
-  const gain = ac.createGain();          gain.gain.value = 0.72;
-  const hp   = ac.createBiquadFilter();  hp.type = 'highpass'; hp.frequency.value = 12;
-  const lim  = ac.createDynamicsCompressor();
-  lim.threshold.value = -4; lim.knee.value = 6; lim.ratio.value = 12;
-  lim.attack.value = 0.003; lim.release.value = 0.15;
-  const clip = mkSoftClip(ac);                      // final safety: output never exceeds ±1
-  const ana  = ac.createAnalyser();      ana.fftSize = 1024;
-  gain.connect(hp).connect(lim).connect(clip.input);
-  clip.output.connect(ana).connect(ac.destination);
-  engine.bus = engine.masterGain = gain;
-  engine.masterAna = ana;
-  /* transport + tempo-aware helper */
+  /* transport + tempo-aware helper (needs no context until it plays) */
   engine.transport = createTransport(engine);
   engine.beatSec   = () => engine.transport.beatSec();
+  /**
+   * Bind an AudioContext and build the master chain. Idempotent.
+   * The live app calls this from boot() (inside the user gesture), so no context is
+   * ever created before the user interacts — browsers warn about that otherwise.
+   */
+  engine.attach = ac => {
+    if (engine.ac) return engine;
+    engine.ac = ac;
+    engine.sampleRate = ac.sampleRate;
+    /* master chain */
+    const gain = ac.createGain();          gain.gain.value = 0.72;
+    const hp   = ac.createBiquadFilter();  hp.type = 'highpass'; hp.frequency.value = 12;
+    const lim  = ac.createDynamicsCompressor();
+    lim.threshold.value = -4; lim.knee.value = 6; lim.ratio.value = 12;
+    lim.attack.value = 0.003; lim.release.value = 0.15;
+    const clip = mkSoftClip(ac);                      // final safety: output never exceeds ±1
+    const ana  = ac.createAnalyser();      ana.fftSize = 1024;
+    gain.connect(hp).connect(lim).connect(clip.input);
+    clip.output.connect(ana).connect(ac.destination);
+    engine.bus = engine.masterGain = gain;
+    engine.masterAna = ana;
+    return engine;
+  };
   /**
    * Async setup: shared noise, wavetables and the crusher worklet.
    * Must finish before the first module is built.
    * @param {{workletSrc?:string}} [o]
    */
   engine.init = async ({ workletSrc } = {}) => {
+    const ac = engine.ac;
     try { await ac.resume(); } catch (e) { /* offline contexts / blocked autoplay */ }
     engine.noise.white = mkNoise(ac, false);
     engine.noise.pink  = mkNoise(ac, true);
     initTables(ac, engine.waves);
     engine.hasWorklet = false;
     if (workletSrc && ac.audioWorklet) {
-      try {
-        const url = URL.createObjectURL(new Blob([workletSrc], { type: 'application/javascript' }));
-        await ac.audioWorklet.addModule(url);
-        URL.revokeObjectURL(url);
-        engine.hasWorklet = true;
-      } catch (e) { console.warn('AudioWorklet unavailable — using ScriptProcessor fallback'); }
+      /* Blob URL first; Chromium refuses blob: worklets on file:// pages, where a
+         data: URL still works. ScriptProcessor is the last resort. */
+      const blobUrl = () => URL.createObjectURL(new Blob([workletSrc], { type: 'application/javascript' }));
+      const dataUrl = () => 'data:application/javascript;base64,' +
+                            btoa(unescape(encodeURIComponent(workletSrc)));
+      for (const mk of [blobUrl, dataUrl]) {
+        let url = null;
+        try { url = mk(); await ac.audioWorklet.addModule(url); engine.hasWorklet = true; break; }
+        catch (e) { /* try the next loader */ }
+        finally { if (url && url.startsWith('blob:')) URL.revokeObjectURL(url); }
+      }
+      if (!engine.hasWorklet) console.warn('AudioWorklet unavailable — using ScriptProcessor fallback');
     }
     return engine;
   };
+  if (ac) engine.attach(ac);                        // offline renders attach immediately
   return engine;
 }
 /* ---- the default engine + short aliases for APP-SHELL code only
    (recorder, toolbar, scheduler). Modules must use m.ctx instead. ---- */
-const ENGINE = createEngine(new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }));
-const AC = ENGINE.ac;
-const { now, setAP, cah, bus: BUS, masterGain, masterAna, transport } = ENGINE;
+const ENGINE = createEngine(null);           // context is attached on the first click (startAudio)
+let AC = null;                               // ENGINE.ac once started
+const now    = () => ENGINE.now();
+const setAP  = (p, v, t) => ENGINE.setAP(p, v, t);
+const transport = ENGINE.transport;
+/** Create the live AudioContext (must run inside a user gesture). Idempotent. */
+function startAudio() {
+  if (ENGINE.ac) return ENGINE;
+  ENGINE.attach(new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' }));
+  AC = ENGINE.ac;
+  ENGINE.masterGain.gain.value = +$('#mvol').value;
+  return ENGINE;
+}
 const beatSec = () => transport.beatSec();
 /** Legacy facade so `clock.bpm = 128` in presets and `clock.playing` keep working. */
 const clock = {
@@ -847,10 +897,7 @@ const clock = {
   set bpm(v)    { transport.setTempo(v); },
   get playing() { return transport.playing; }
 };
-/** Legacy wrapper (boot() and older call sites). */
-function setPlay(p) { p ? transport.play() : transport.stop(); }
-/* ---------------------------------------------------------------- noise buffers
- * Signature change only: `AC` → the `ac` parameter. Body otherwise unchanged.  */
+/* ---------------------------------------------------------------- noise buffers */
 function mkNoise(ac, pink) {
   const len = ac.sampleRate * 3;
   const buf = ac.createBuffer(1, len, ac.sampleRate);
@@ -890,7 +937,7 @@ function initTables(ac, table) {
   mkWave(ac, table, 'digi',  [1, .7, .5, .45, .4, .36, .3, .28, .22, .2, .16, .14, .12, .1, .08, .07, .06]);
 }
 
-/* ------------------------------------------------------- bit-crusher worklet src
+/* ------------------------------------------------- worklet source (crusher + recorder tap)
  * Compiled at runtime from this string via a Blob URL, so the page stays a single
  * static file. If AudioWorklet is unavailable the Crush module silently falls back
  * to a ScriptProcessorNode running the same maths (see DEFS.crush).
@@ -898,7 +945,7 @@ function initTables(ac, table) {
  * All six parameters are a-rate, which is why you can modulate bit depth at audio
  * rate for ring-mod-like artefacts.
  * ------------------------------------------------------------------------- */
-const CRUSH_SRC = `
+const WORKLET_SRC = `
 class CrushProc extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
@@ -951,17 +998,37 @@ class CrushProc extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('crusher', CrushProc);`;
+registerProcessor('crusher', CrushProc);
+
+/* Recorder tap: forwards the master signal to the main thread in 4096-frame
+   chunks stamped with their start frame, so takes can be cropped sample-exactly. */
+class RecTap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.N = 4096; this.n = 0; this.f0 = -1; this.on = true;
+    this.L = new Float32Array(this.N); this.R = new Float32Array(this.N);
+    this.port.onmessage = e => { if (e.data === 'stop') { this.flush(); this.on = false; } };
+  }
+  flush() {
+    if (this.n) this.port.postMessage({ f0: this.f0, L: this.L.slice(0, this.n), R: this.R.slice(0, this.n) });
+    this.n = 0; this.f0 = -1;
+  }
+  process(inputs) {
+    if (!this.on) return false;
+    const I = inputs[0], l = I && I[0], r = I && (I[1] || I[0]);
+    const len = l ? l.length : 128;
+    if (this.f0 < 0) this.f0 = currentFrame;
+    for (let i = 0; i < len; i++) { this.L[this.n + i] = l ? l[i] : 0; this.R[this.n + i] = r ? r[i] : 0; }
+    this.n += len;
+    if (this.n >= this.N) this.flush();
+    return true;
+  }
+}
+registerProcessor('rec-tap', RecTap);`;
 
 
-/* -------------------------------------------------------- AudioParam utilities */
-
-/**
- * Smoothly move an AudioParam to a value (click-free).
- * @param {AudioParam} p
- * @param {number} v      target value
- * @param {number} [t]    time constant in seconds (default 12 ms)
- */
+/* AudioParam helpers (setAP = click-free move, cah = cancel-and-hold) live on the
+   engine object, see createEngine() in SECTION 2.1. */
 
 
 /* =============================================================================
@@ -997,10 +1064,15 @@ function quantN(n, sc, root) {
   if (sc.length >= 12) return n;                       // chromatic: nothing to do
   const oct = Math.floor((n - root) / 12);
   const pc  = ((n - root) % 12 + 12) % 12;
+  /* candidates include the neighbouring octaves' degrees, so e.g. pitch class 11
+     in PentMaj snaps UP to the next root (distance 1) rather than down to 9 (2).
+     Candidates are scanned low → high, so exact ties resolve downward. */
   let best = sc[0], bestDist = 99;
-  for (const s of sc) {
-    const d = Math.abs(s - pc);
-    if (d < bestDist) { bestDist = d; best = s; }
+  for (const off of [-12, 0, 12]) {
+    for (const s of sc) {
+      const d = Math.abs(s + off - pc);
+      if (d < bestDist) { bestDist = d; best = s + off; }
+    }
   }
   return root + oct * 12 + best;
 }
@@ -1434,11 +1506,16 @@ function knobEl(p) {
       return;
     }
     // normal drag: one undo step per gesture, recorded on release
-    const y0 = e.clientY, n0 = p2n(p, p.value), before = p.value;
+    // Incremental: each move adds its own delta at the CURRENT fine/coarse rate, and
+    // the unquantised position `n` is tracked separately so stepped knobs still move.
+    let lastY = e.clientY, n = p2n(p, p.value);
+    const before = p.value;
     w.setPointerCapture(e.pointerId);
     const mv = ev => {
       const fine = ev.shiftKey ? 0.25 : 1;
-      p.setValue(n2p(p, n0 - (ev.clientY - y0) / 260 * fine));
+      n = clamp(n - (ev.clientY - lastY) / 260 * fine, 0, 1);
+      lastY = ev.clientY;
+      p.setValue(n2p(p, n));
     };
     const up = () => {
       w.removeEventListener('pointermove', mv);
@@ -1558,7 +1635,7 @@ const wlayer = $('#wlayer');
 
 /* ===== RACK CONTEXT ==========================================================
  * Normally: modules are built on ENGINE and shown on the stage.
- * During an offline render (Step 6) these three are swapped so a hidden copy of
+ * During an offline render (SECTION 21) these three are swapped so a hidden copy of
  * the rack can be built on another engine without touching the visible one.
  * ========================================================================== */
 let RACK_ENGINE = ENGINE;     // engine given to new modules as m.ctx
@@ -1927,6 +2004,7 @@ history.onChange(() => {
     ctx.scale(devicePixelRatio, devicePixelRatio);
     c.W = w; c.H = hgt;
     m.center.appendChild(c);
+    (m.vizList = m.vizList || []).push(ctx);      // re-scaled when devicePixelRatio changes
     return ctx;
   };
   m.label = t => { m.ctrls.appendChild(h('div', 'minilbl', t)); };
@@ -2104,8 +2182,21 @@ function connect(from, to, amount) {
 
   // audio/CV connections get their own gain node = the cable's depth control
   if (from.kind === 'sig') {
-    c.g = from.m.ctx.ac.createGain();
-    try { from.node.connect(c.g); } catch (e) {}
+    const ac = from.m.ctx.ac;
+    c.g = ac.createGain();
+    /* Feedback guard: the Web Audio spec mutes any cycle without a DelayNode
+       (Firefox/Safari do; Chromium happens not to). If this cable closes an audio
+       loop, route it through a minimal delay (clamped by the engine to one 128-frame
+       render quantum, ≈ 3 ms) so feedback patches sound the same everywhere. */
+    const audible = !c.to.p || (c.to.p.mod && c.to.p.mod.targets && c.to.p.mod.targets.length);
+    if (audible && (c.to.m === from.m || audioPathExists(c.to.m, from.m))) {
+      c.dly = ac.createDelay(0.05);
+      c.dly.delayTime.value = 128 / ac.sampleRate;
+      try { from.node.connect(c.dly); c.dly.connect(c.g); } catch (e) {}
+      if (history.active && !HEADLESS) toast('feedback loop · ' + (128 / ac.sampleRate * 1000).toFixed(1) + ' ms delay inserted');
+    } else {
+      try { from.node.connect(c.g); } catch (e) {}
+    }
     if (c.to.p) {
       ((c.to.p.mod && c.to.p.mod.targets) || []).forEach(t => {
         try { c.g.connect(t); } catch (e) {}
@@ -2126,6 +2217,26 @@ function connect(from, to, amount) {
   updPlugs();
   recCable(c, true);
   return c;
+}
+
+/**
+ * Is there an audio path from module `a` to module `b` through existing cables?
+ * Counts signal cables into jacks and into audio-rate parameters (AudioParam
+ * connections are part of the graph too). Modules are assumed to pass any input
+ * to their outputs — conservative: at worst a harmless 3 ms delay is inserted.
+ */
+function audioPathExists(a, b) {
+  const seen = new Set([a]), stack = [a];
+  while (stack.length) {
+    const m = stack.pop();
+    if (m === b) return true;
+    for (const c of conns) {
+      if (c.from.m !== m || !c.g || seen.has(c.to.m)) continue;
+      if (c.to.p && !(c.to.p.mod && c.to.p.mod.targets && c.to.p.mod.targets.length)) continue;
+      seen.add(c.to.m); stack.push(c.to.m);
+    }
+  }
+  return false;
 }
 
 /** Change a cable's depth. For parameters the depth is scaled into param units. */
@@ -2150,7 +2261,12 @@ function setAmount(c, a) {
 function disconnect(c) {
   recCable(c, false);            // record before teardown so the ref is still valid
   if (c.g) {
-    try { c.from.j.node.disconnect(c.g); } catch (e) {}
+    if (c.dly) {
+      try { c.from.j.node.disconnect(c.dly); } catch (e) {}
+      try { c.dly.disconnect(); }             catch (e) {}
+    } else {
+      try { c.from.j.node.disconnect(c.g); } catch (e) {}
+    }
     try { c.g.disconnect(); }             catch (e) {}
   }
   const a = c.from.j.conns.indexOf(c);
@@ -2486,7 +2602,8 @@ function showInsp() {
                     (c.to.p ? c.to.p.label : c.to.j.label));
 
     el.appendChild(h('span', null,
-      `<span class="k" style="color:${c.from.m.def.color}">${src}</span> → <span class="k">${dst}</span>`));
+      `<span class="k" style="color:${c.from.m.def.color}">${src}</span> → <span class="k">${dst}</span>` +
+      (c.dly ? ' <span class="lbl" title="closes a feedback loop">· feedback (+3 ms)</span>' : '')));
 
     if (c.kind === 'sig') {
       el.appendChild(h('span', 'lbl', 'depth'));
@@ -2543,7 +2660,7 @@ function showInsp() {
     el.appendChild(h('span', null,
       `drag an <b style="color:#cfe0f5">output</b> onto an input or a knob · ` +
       `<span class="k">${modules.length}</span> modules · ` +
-      `<span class="k">${conns.length}</span> cables · ${(AC.sampleRate / 1000).toFixed(1)}kHz`));
+      `<span class="k">${conns.length}</span> cables · ${AC ? (AC.sampleRate / 1000).toFixed(1) + 'kHz' : 'audio off'}`));
   }
 }
 
@@ -2752,7 +2869,7 @@ function duplicateModules(mods, { cables = null } = {}) {
 /* ===== 10 · SCHEDULER =======================================================
  * pumpControl()        read CV taps + apply control-rate params   (live: every frame)
  * pumpSched(t, ahead)  let modules schedule events in [t, ahead]  (live: every 22 ms)
- * Both are also driven by the offline renderer (Step 6).
+ * Both are also driven by the offline renderer (SECTION 21).
  * ========================================================================== */
 /** Sample every tapped output jack (average of a tiny window) → j.cv. */
 function readTaps() {
@@ -2771,14 +2888,14 @@ function pumpSched(t, ahead) {
   }
 }
 setInterval(() => {
-  if (HEADLESS || AC.state !== 'running') return;
+  if (HEADLESS || !AC || AC.state !== 'running') return;
   pumpControl();                                  // also in rAF; here so modulation survives hidden tabs
   const t = now(), ahead = t + LOOK;
   /* loop wrap: flush events up to the loop end, jump back, continue */
   const tLoop = transport.loopCrossing(ahead);
   if (tLoop != null) { pumpSched(t, tLoop); transport.wrapLoop(); }
   pumpSched(t, ahead);
-  songTick();                                     // "song finished" check (Step 5)
+  songTick();                                     // "song finished" check (SECTION 20)
 }, 22);
 
 
@@ -2811,10 +2928,8 @@ DEFS.osc = {
   desc: 'multi-wave oscillator with sub & FM',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP, waves: WT } = m.ctx;      // engine context: never use globals in modules
+    const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
     /* ---- audio graph ---- */
     const out = m.node(AC.createGain()); out.gain.value = 1;
     const lvl = m.node(AC.createGain()); lvl.gain.value = 0.5; lvl.connect(out);
@@ -2987,9 +3102,7 @@ DEFS.osc = {
   name: 'POLY', glyph: '♛', color: '#e879f9', w: 262,
   desc: 'polyphonic synth · 8 voices · filter + ADSR per voice',
   build(m) {
-    const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-            waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-    const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP, waves: WT } = m.ctx;      // engine context: never use globals in modules
 
     /* ===== BLOCK: SETTINGS (mirror of the knobs, read at note time) ===== */
     const NV = 8;                                   // physical voices
@@ -3205,10 +3318,8 @@ DEFS.drum = {
   desc: 'self-contained percussion voice',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP } = m.ctx;      // engine context: never use globals in modules
+    const { white: NZ_W } = m.ctx.noise;
     /* ---- output chain: voices → drive shaper → level → out ---- */
     const out = m.node(AC.createGain()); out.gain.value = .8;
     const shp = m.node(AC.createWaveShaper());
@@ -3394,10 +3505,7 @@ DEFS.filter = {
   desc: 'multimode 12/24 dB filter w/ drive',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const out = m.node(AC.createGain());
 
@@ -3528,10 +3636,7 @@ DEFS.crush = {
   desc: 'bit crusher / decimator / folder',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP, hasWorklet: HAS_WORKLET } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const out = m.node(AC.createGain());
 
@@ -3658,10 +3763,7 @@ DEFS.echo = {
   desc: 'ping-pong delay w/ tone + wobble',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP, beatSec } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const out = m.node(AC.createGain());
     const dry = m.node(AC.createGain());
@@ -3733,7 +3835,10 @@ DEFS.echo = {
 
       { k:'knob', id:'fb',    label:'Fb', min:0, max:1.15, def:.45, curve:'lin', unit:'%', rnd:[0, .85],
         mod:{ targets:[fbL.gain, fbR.gain], scale:.5 },
-        set: v => { setAP(fbL.gain, v, .03); setAP(fbR.gain, v, .03); } },
+        set: v => {
+          if (m.params.freeze && m.params.freeze.value) return;    // frozen = unity feedback, knob waits
+          setAP(fbL.gain, v, .03); setAP(fbR.gain, v, .03);
+        } },
 
       { k:'knob', id:'tone',  label:'Tone', min:300, max:18000, def:5200, curve:'exp', unit:'Hz',
         cents:1, mod:{ targets:[lp.detune], scale:3600 },
@@ -3803,10 +3908,7 @@ DEFS.rev = {
   desc: 'generated convolution reverb',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const out = m.node(AC.createGain());
     const pre = m.node(AC.createDelay(.5));                 // pre-delay
@@ -3951,10 +4053,7 @@ DEFS.env = {
   desc: 'DAHDSR envelope generator',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP, cah } = m.ctx;      // engine context: never use globals in modules
     const cs   = m.node(AC.createConstantSource()); cs.offset.value = 0; cs.start();
     const dep  = m.node(AC.createGain()); dep.gain.value = 1;
     const bias = m.node(AC.createConstantSource()); bias.offset.value = 0; bias.start();
@@ -4122,10 +4221,7 @@ DEFS.lfo = {
   desc: 'low frequency oscillator / random',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, setAP, beatSec } = m.ctx;      // engine context: never use globals in modules
     let osc = null;                                   // created by remake()
 
     const oscGain = m.node(AC.createGain());          // periodic engine level
@@ -4329,7 +4425,7 @@ const SEQ_MODES = ['on', 'pitch', 'vel', 'gate', 'prob', 'ratch', 'slide'];
 const SEQ_CLIP  = { data: null };               // shared pattern clipboard (copy/paste buttons)
 const seqDefaultSteps = () => Array.from({ length: 32 }, (_, i) =>
   ({ on: i % 4 === 0, note: 0, vel: .85, gate: .5, prob: 1, ratch: 1, slide: 0 }));
-/* ===== BLOCK: SHARE-LINK CODEC FOR ONE PATTERN (columnar, see Z2) ===== */
+/* ===== BLOCK: SHARE-LINK CODEC FOR ONE PATTERN (columnar, see SECTION 15.5) ===== */
 function seqPackSteps(S) {
   const bits = f => S.reduce((a, s, i) => a | (f(s) ? (1 << i) : 0), 0) >>> 0;
   const col = (key, def) => {
@@ -4359,9 +4455,7 @@ DEFS.seq = {
   name: 'SEQ', glyph: '▤', color: '#fb7185', w: 470,
   desc: 'step sequencer — 8 patterns, pitch CV, gate, velocity',
   build(m) {
-    const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-            waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-    const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now, beatSec, transport } = m.ctx;      // engine context: never use globals in modules
 
     /* ===== BLOCK: OUTPUTS + STATE ===== */
     const cvP = m.node(AC.createConstantSource()); cvP.offset.value = 0; cvP.start();
@@ -4376,6 +4470,7 @@ DEFS.seq = {
     st.steps   = st.banks[0];         // alias of the current bank (presets write into this)
     st.pending = null;                // queued pattern switch (applied at loop start)
     st.step = 0; st.nextT = null; st.dirv = 1;     // null = not yet located (0 is a valid offline time)
+    st.abs = 0;                       // absolute step-grid counter since bar 1 → swing parity
     st.q = [];                        // {t,i,b} queue so the playhead matches what you hear
     st.hist = [];                     // last few fired steps {t,i,dur} → live-record quantising
     st.mode = 'on'; st.play = -1;
@@ -4552,13 +4647,16 @@ DEFS.seq = {
     });
 
     /* ===== BLOCK: CLOCK ===== */
-    function stepDur(i) {
+    /** Length of grid step `g` (absolute step count). Swing lengthens even grid steps
+        and shortens odd ones, so the long/short feel is tied to the beat grid and
+        stays put with odd pattern lengths or non-forward directions. */
+    function stepDur(g) {
       const b  = DIVS[m.params.div.value] * beatSec();
       const sw = m.params.swing.effective();
-      return b * (i % 2 === 0 ? 1 + sw : 1 - sw);
+      return b * (g % 2 === 0 ? 1 + sw : 1 - sw);
     }
     m.stepDur = stepDur;
-    /** Phase-lock to the transport (see Refactor A). Forward playback derives the step from the beat. */
+    /** Phase-lock to the transport (SECTION 3.2). Forward playback derives the step from the beat. */
     m.locate = (beat, t) => {
       const L = Math.round(m.params.len.value);
       const dir = m.params.dir.value;
@@ -4569,9 +4667,12 @@ DEFS.seq = {
         const pos = beat / stepBeats;
         const idx = Math.ceil(pos - 1e-6);
         st.step  = idx % L;
-        st.nextT = t + (idx - pos) * stepBeats * beatSec();
+        st.abs   = idx;
+        const sw = (idx % 2) ? m.params.swing.effective() * stepBeats * beatSec() : 0;   // odd grid steps are swung late
+        st.nextT = t + (idx - pos) * stepBeats * beatSec() + sw;
       } else {
         st.step  = (dir === 'rev') ? L - 1 : 0;
+        st.abs   = Math.max(0, Math.ceil(beat / DIVS[m.params.div.value] - 1e-6));
         st.nextT = t;
       }
     };
@@ -4582,7 +4683,8 @@ DEFS.seq = {
       if (st.nextT == null || st.nextT < t - 1) st.nextT = t + .02;
       while (st.nextT < ahead) {
         fire(st.nextT);
-        st.nextT += stepDur(st.step);
+        st.nextT += stepDur(st.abs);
+        st.abs++;
         adv();
       }
     };
@@ -4611,7 +4713,7 @@ DEFS.seq = {
       const sb = song.bankFor(m.id, transport.beatAt(t));
       const bank = (sb != null) ? sb : st.bank;
       st.q.push({ t, i, b: (sb != null) ? sb : -2 });
-      st.hist.push({ t, i, dur: stepDur(i) });
+      st.hist.push({ t, i, dur: stepDur(st.abs) });
       if (st.hist.length > 8) st.hist.shift();
       if (bank < 0) return;
       const s = st.banks[bank][i];
@@ -4624,7 +4726,7 @@ DEFS.seq = {
               + Math.round(m.params.oct.effective()) * 12;
       const hum = m.params.hum.effective();
       const vel = clamp(s.vel * (1 - hum * .5 + Math.random() * hum * .5), 0, 1.2);
-      const dur = stepDur(i);
+      const dur = stepDur(st.abs);
       const rt  = Math.max(1, Math.round(s.ratch));
       for (let k = 0; k < rt; k++) {
         const tt = t + k * dur / rt + (hum ? rnd(.012 * hum, -.006 * hum) : 0);
@@ -4776,10 +4878,7 @@ DEFS.vca = {
   desc: 'amplifier / panner',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const g   = m.node(AC.createGain()); g.gain.value = 0;
     const p   = m.node(AC.createStereoPanner());
@@ -4820,10 +4919,7 @@ DEFS.mix = {
   desc: '4 channel mixer',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP } = m.ctx;      // engine context: never use globals in modules
     const out = m.node(AC.createGain());
     const ch = [];
 
@@ -4885,10 +4981,7 @@ DEFS.scope = {
   desc: 'oscilloscope / spectrum / XY',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const inB = m.node(AC.createGain());
     const sp  = m.node(AC.createChannelSplitter(2));
@@ -4911,6 +5004,10 @@ DEFS.scope = {
     off.height = cnv.height;
     const octx = off.getContext('2d');
     octx.scale(devicePixelRatio, devicePixelRatio);
+    m.onDpr = r => {                                  // keep the trail canvas in step with cnv
+      off.width = cnv.width; off.height = cnv.height;
+      octx.setTransform(r, 0, 0, r, 0, 0);
+    };
 
     const tl = new Float32Array(4096);   // In A left
     const tr = new Float32Array(4096);   // In A right
@@ -5076,10 +5173,7 @@ DEFS.out = {
   desc: 'master output + limiter',
 
   build(m) {
-      // ---- injected engine context (see Refactor C) ----
-  const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-          waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-  const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, setAP, bus: BUS } = m.ctx;      // engine context: never use globals in modules
     const inn = m.node(AC.createGain());
     const g   = m.node(AC.createGain());
     const p   = m.node(AC.createStereoPanner());
@@ -5142,9 +5236,7 @@ DEFS.keys = {
   name: 'KEYS', glyph: '♫', color: '#f59e0b', w: 300,
   desc: 'keyboard / MIDI in → gate, pitch, velocity, notes',
   build(m) {
-    const { ac: AC, now, setAP, cah, beatSec, transport, bus: BUS,
-            waves: WT, hasWorklet: HAS_WORKLET } = m.ctx;
-    const { white: NZ_W, pink: NZ_P } = m.ctx.noise;
+    const { ac: AC, now } = m.ctx;      // engine context: never use globals in modules
     const cvP = m.node(AC.createConstantSource()); cvP.offset.value = 0; cvP.start();
     const cvV = m.node(AC.createConstantSource()); cvV.offset.value = 0; cvV.start();
     const jGate  = m.addOut({ id: 'gate',  label: 'Gate',  kind: 'trig' });
@@ -5219,12 +5311,12 @@ DEFS.keys = {
     cnv.addEventListener('pointerdown', e => {
       e.stopPropagation(); AC.resume();
       cnv.setPointerCapture(e.pointerId);
-      cur = keyAt(e); m.noteOn(cur, .8);
+      cur = keyAt(e); m.noteOn(cur, .8); noteInput.record(cur, .8);
     });
     cnv.addEventListener('pointermove', e => {
       if (cur == null) return;                                  // glissando across keys
       const k = keyAt(e);
-      if (k !== cur) { m.noteOff(cur); cur = k; m.noteOn(cur, .8); }
+      if (k !== cur) { m.noteOff(cur); cur = k; m.noteOn(cur, .8); noteInput.record(cur, .8); }
     });
     const upKey = () => { if (cur != null) { m.noteOff(cur); cur = null; } };
     cnv.addEventListener('pointerup', upKey);
@@ -5256,12 +5348,8 @@ DEFS.keys = {
  * drag = place where you release. Edit ORDER to re-order / hide module types.
  * ==========================================================================*/
 const ORDER = ['osc','poly','keys','drum','filter','crush','echo','rev','env','lfo','seq','vca','mix','scope','out'];
-console.log(ORDER)
-console.log(DEFS);
 ORDER.forEach(type => {
-  console.log("type: ", type);
   const d = DEFS[type];
-  console.log(d);
   const b = h('div', 'pbtn',
     `<span class="g" style="color:${d.color}">${d.glyph}</span><span class="t">${d.name}</span>`);
   b.title = 'add ' + d.name;
@@ -5314,12 +5402,28 @@ ORDER.forEach(type => {
  * Capped at ~60 fps; the 15 ms guard keeps high-refresh monitors from doubling
  * the workload.
  * ==========================================================================*/
-let lastT = 0;
+let lastT = 0, lastDpr = devicePixelRatio;
+/** Resize every module canvas backing store to the current devicePixelRatio.
+    Modules with extra canvases (SCOPE's offscreen trail) implement m.onDpr(). */
+function rescaleCanvases() {
+  const r = devicePixelRatio;
+  for (const m of modules) {
+    for (const ctx of (m.vizList || [])) {
+      const c = ctx.canvas;
+      c.width = Math.round(c.W * r); c.height = Math.round(c.H * r);
+      ctx.setTransform(r, 0, 0, r, 0, 0);
+    }
+    if (m.onDpr) { try { m.onDpr(r); } catch (e) {} }
+  }
+}
 const posEl = $('#pos');
+const METER_BUF = new Float32Array(256);
 function frame(t) {
   requestAnimationFrame(frame);
   if (HEADLESS || t - lastT < 15) return;         // paused during offline render
   lastT = t;
+  /* 0 · moved to another monitor / browser zoom changed → re-rasterise canvases */
+  if (devicePixelRatio !== lastDpr) { lastDpr = devicePixelRatio; rescaleCanvases(); }
   /* 1 · taps + control-rate modulation */
   pumpControl();
   /* 2 · draw modules that are actually on screen */
@@ -5336,17 +5440,17 @@ function frame(t) {
   }
   /* 3 · cables */
   if (wiresDirty) layoutWires();
-  /* 4 · master meter */
-  const mb = new Float32Array(256);
-  masterAna.getFloatTimeDomainData(mb);
-  let pk = 0;
-  for (let i = 0; i < 256; i += 3) pk = Math.max(pk, Math.abs(mb[i]));
-  $('#meter i').style.width = clamp(pk * 100, 0, 100) + '%';
+  /* 4 · master meter (buffer reused: no per-frame allocation) */
+  if (ENGINE.masterAna) {
+    const mb = METER_BUF;
+    ENGINE.masterAna.getFloatTimeDomainData(mb);
+    let pk = 0;
+    for (let i = 0; i < 256; i += 3) pk = Math.max(pk, Math.abs(mb[i]));
+    $('#meter i').style.width = clamp(pk * 100, 0, 100) + '%';
+  }
   /* 5 · transport readout + song panel */
   posEl.textContent = fmtPos(transport.beatAt());
   songUI.tick();
-    /* 6 · transport position readout */
-    posEl.textContent = fmtPos(transport.beatAt());
 }
 requestAnimationFrame(frame);
 
@@ -5537,7 +5641,7 @@ function clearPatch() {
   [...modules].forEach(removeModule);
   modCount = {};
   song.restore();                              // song state belongs to the rack (undo restores it)
-  selSet.clear(); selMod = null;               // selSet is introduced in Patch 2
+  selSet.clear(); selMod = null;
 }
 /** Raw, history-free patch load. Used by deserialize() and by undo/redo. */
 function loadPatchData(d) {
@@ -5607,6 +5711,7 @@ function P_acid() {
   env.params.d.setValue(.18);
   env.params.s.setValue(.08);
   env.params.r.setValue(.12);
+  env.params.vel.setValue(.5);                   // accents: velocity shapes the envelope peak
 
   cr.params.bits.setValue(11);
   cr.params.mix.setValue(.45);
@@ -5623,9 +5728,8 @@ function P_acid() {
 
   connect(seq.outs[0], env.ins[0]);                                  // gate  → env
   connect(seq.outs[1], { m: osc, param: osc.params.fine }, 1);       // pitch → osc (1:1)
-  connect(seq.outs[2], { m: vca, param: vca.params.gain }, .9);      // vel   → vca
   connect(env.outs[0], { m: flt, param: flt.params.freq }, .62);     // env   → cutoff
-  connect(env.outs[0], { m: vca, param: vca.params.gain }, .7);      // env   → vca
+  connect(env.outs[0], { m: vca, param: vca.params.gain }, 1);       // env   → vca (closes between notes)
   connect(lfo.outs[0], { m: flt, param: flt.params.freq }, .25);     // lfo   → cutoff
 
   connect(osc.outs[0], flt.ins[0]);
@@ -5765,8 +5869,14 @@ const SESS_KEY = 'mod_session';
 let curPatch = null;
 
 function libRead() {
-  try { return JSON.parse(localStorage.getItem(LIB_KEY) || '{}'); }
-  catch (e) { return {}; }
+  /* null-prototype copy: names like "__proto__" or "constructor" are ordinary keys */
+  const u = Object.create(null);
+  try {
+    const o = JSON.parse(localStorage.getItem(LIB_KEY) || '{}');
+    if (o && typeof o === 'object' && !Array.isArray(o))
+      for (const k of Object.keys(o)) if (o[k] && typeof o[k] === 'object') u[k] = o[k];
+  } catch (e) { /* unreadable library = empty */ }
+  return u;
 }
 function libWrite(u) {
   try { localStorage.setItem(LIB_KEY, JSON.stringify(u)); }
@@ -6060,7 +6170,7 @@ setInterval(() => {
  *
  * SAFETY: the data comes from a link, so it is treated as hostile: size caps
  * while inflating, module/cable caps, unknown types are skipped, and param
- * values are validated in importFragment (Patch S3).
+ * values are validated in importFragment.
  * ==========================================================================*/
  const SHARE = (() => {
   const VERSION = 2;                   // v2 = SEQ state uses the compact def.pack() codec
@@ -6235,93 +6345,126 @@ setInterval(() => {
 /* =============================================================================
  * 16 · RECORDER
  * -----------------------------------------------------------------------------
- * Taps the master analyser with a ScriptProcessorNode, collects raw Float32
- * blocks and writes a 16-bit stereo WAV on stop. Set "bars" to 0 for manual
- * start/stop, or to N to auto-stop after N bars at the current tempo.
+ * Captures the post-limiter master in real time and downloads a 16-bit WAV.
+ *
+ *   bars = 0   manual: from the click until ● is clicked again
+ *   bars = N   exactly N bars, starting on the NEXT BAR LINE (if the transport
+ *              is stopped it is started and the take begins with it). Tempo
+ *              changes during the take are honoured (the end is a beat, not a time).
+ *
+ * Capture runs in the 'rec-tap' AudioWorklet (audio thread, no UI-jank dropouts);
+ * ScriptProcessorNode is only a fallback. Every block carries its start time, so
+ * the take is cropped sample-exactly to [tStart, tEnd).
  *
  * (MP3 would require bundling an encoder such as lamejs; WAV is lossless and
  *  imports into every DAW, so it is the default here.)
  * ==========================================================================*/
-let recNode = null, recL = [], recR = [], recOn = false, recStopAt = 0;
+const rec = {
+  on: false, node: null, sink: null, blocks: [],
+  tStart: 0,            // audio time of the first recorded sample
+  endBeat: null,        // bars mode: transport beat where the take ends
+  tEnd: null,           // fixed end time (manual stop / transport stopped)
+  startBar: 1, watchdog: null, offStop: null
+};
 
-/* ScriptProcessors only run when connected to the graph, so we park it on a
-   silent gain node that feeds the destination.                                */
-const recSink = AC.createGain();
-recSink.gain.value = 0;
-recSink.connect(AC.destination);
+/** Audio time at which the take should end (null = not known yet). */
+function recEndTime() {
+  if (rec.tEnd != null) return rec.tEnd;
+  if (rec.endBeat != null && transport.playing) return transport.timeAt(rec.endBeat);
+  return null;
+}
+
+/** A block of master audio starting at audio time t0 arrived. */
+function recBlock(t0, L, R) {
+  if (!rec.on) return;
+  rec.blocks.push({ t0, L, R });
+  const end = recEndTime();
+  if (end != null && t0 + L.length / AC.sampleRate >= end) recFinish(end);
+}
 
 function recStartFn() {
+  if (!AC) return;
   AC.resume();
-  recL = []; recR = []; recOn = true;
+  const bars = Math.max(0, Math.round(+$('#rbars').value) || 0);
+  Object.assign(rec, { on: true, blocks: [], tEnd: null, endBeat: null });
 
-  const bars = Math.max(0, +$('#rbars').value || 0);
-  recStopAt = bars > 0 ? now() + bars * 4 * beatSec() : 0;
+  if (bars > 0) {
+    if (!transport.playing) transport.play();
+    const b = transport.beatAt(now() + .03);                 // a bar line we can still catch
+    const startBeat = Math.ceil(b / 4 - 1e-9) * 4;
+    rec.tStart   = transport.timeAt(startBeat);
+    rec.endBeat  = startBeat + bars * 4;
+    rec.startBar = startBeat / 4 + 1;
+    /* transport stopped before the end: the take ends there */
+    rec.offStop = transport.on('stop', () => { if (rec.on && rec.tEnd == null) rec.tEnd = now(); });
+  } else {
+    rec.tStart = now();
+  }
 
-  recNode = AC.createScriptProcessor(4096, 2, 2);
-  masterAna.connect(recNode);
-  recNode.connect(recSink);
-
-  recNode.onaudioprocess = e => {
-    if (!recOn) return;
-    recL.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    recR.push(new Float32Array(e.inputBuffer.getChannelData(1)));
-    if (recStopAt && now() >= recStopAt) recStopFn();
-  };
+  if (!rec.sink) { rec.sink = AC.createGain(); rec.sink.gain.value = 0; rec.sink.connect(AC.destination); }
+  if (ENGINE.hasWorklet) {
+    rec.node = new AudioWorkletNode(AC, 'rec-tap', { numberOfInputs: 1, numberOfOutputs: 1,
+      outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+    rec.node.port.onmessage = e => recBlock(e.data.f0 / AC.sampleRate, e.data.L, e.data.R);
+  } else {
+    const N = 4096;
+    rec.node = AC.createScriptProcessor(N, 2, 2);
+    rec.node.onaudioprocess = e => {
+      /* input of this callback is the block that ends where playback of its output starts */
+      recBlock(e.playbackTime - N / AC.sampleRate,
+               new Float32Array(e.inputBuffer.getChannelData(0)),
+               new Float32Array(e.inputBuffer.getChannelData(1)));
+    };
+  }
+  ENGINE.masterAna.connect(rec.node);
+  rec.node.connect(rec.sink);
 
   $('#rec').classList.add('on');
-  toast(bars ? ('recording ' + bars + ' bars…') : 'recording… (click ● to stop)');
+  toast(bars ? 'recording ' + bars + ' bar' + (bars > 1 ? 's' : '') + ' from bar ' + rec.startBar + '…'
+             : 'recording… (click ● to stop)');
 }
 
+/** User clicked ● while recording: end the take now (waits for the last block). */
 function recStopFn() {
-  if (!recOn) return;
-  recOn = false;
+  if (!rec.on) return;
+  if (rec.tEnd == null) rec.tEnd = now();
+  clearTimeout(rec.watchdog);                                  // blocks stop arriving if the context is suspended
+  rec.watchdog = setTimeout(() => recFinish(rec.tEnd), 1000);
+}
 
-  try { masterAna.disconnect(recNode); } catch (e) {}
-  try { recNode.disconnect(); }          catch (e) {}
+/** Stop capturing, crop to [tStart, tEnd) and download. */
+function recFinish(tEnd) {
+  if (!rec.on) return;
+  rec.on = false;
+  clearTimeout(rec.watchdog);
+  if (rec.offStop) { rec.offStop(); rec.offStop = null; }
+  try { ENGINE.masterAna.disconnect(rec.node); } catch (e) {}
+  try { rec.node.disconnect(); } catch (e) {}
+  if (rec.node.port) { try { rec.node.port.postMessage('stop'); } catch (e) {} }
+  rec.node = null;
   $('#rec').classList.remove('on');
 
-  const len = recL.reduce((a, b) => a + b.length, 0);
-  if (!len) { toast('nothing recorded'); return; }
-
-  const a = h('a');
-  a.href = URL.createObjectURL(new Blob([encodeWav(recL, recR, len, AC.sampleRate)],
-                                        { type: 'audio/wav' }));
-  a.download = 'modular-' + new Date().toISOString().replace(/[:.]/g, '-') + '.wav';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-
-  toast('exported ' + (len / AC.sampleRate).toFixed(1) + 's WAV');
-}
-
-/** Build a RIFF/WAVE file (16-bit PCM, interleaved stereo) from Float32 blocks. */
-function encodeWav(L, R, len, sr) {
-  const buf = new ArrayBuffer(44 + len * 4);
-  const v   = new DataView(buf);
-  const ws  = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-
-  ws(0, 'RIFF');  v.setUint32(4, 36 + len * 4, true);
-  ws(8, 'WAVE');  ws(12, 'fmt ');
-  v.setUint32(16, 16, true);        // fmt chunk size
-  v.setUint16(20, 1, true);         // PCM
-  v.setUint16(22, 2, true);         // channels
-  v.setUint32(24, sr, true);        // sample rate
-  v.setUint32(28, sr * 4, true);    // byte rate
-  v.setUint16(32, 4, true);         // block align
-  v.setUint16(34, 16, true);        // bits per sample
-  ws(36, 'data'); v.setUint32(40, len * 4, true);
-
-  let o = 44;
-  for (let b = 0; b < L.length; b++) {
-    const l = L[b], r = R[b];
-    for (let i = 0; i < l.length; i++) {
-      v.setInt16(o, clamp(l[i], -1, 1) * 32767, true); o += 2;
-      v.setInt16(o, clamp(r[i], -1, 1) * 32767, true); o += 2;
+  const sr = AC.sampleRate;
+  const i0 = Math.round(rec.tStart * sr), i1 = Math.round(tEnd * sr);
+  const len = Math.max(0, i1 - i0);
+  const L = new Float32Array(len), R = new Float32Array(len);
+  for (const b of rec.blocks) {
+    const f0 = Math.round(b.t0 * sr);
+    for (let k = Math.max(0, i0 - f0); k < b.L.length; k++) {
+      const o = f0 + k - i0;
+      if (o >= len) break;
+      L[o] = b.L[k]; R[o] = b.R[k];
     }
   }
-  return buf;
+  rec.blocks = [];
+  if (!len) { toast('nothing recorded'); return; }
+
+  downloadBlob(new Blob([encodeWavPCM(L, R, sr, 16)], { type: 'audio/wav' }),
+               'modular-' + new Date().toISOString().replace(/[:.]/g, '-') + '.wav');
+  toast('exported ' + (len / sr).toFixed(2) + 's WAV');
 }
 
-$('#rec').onclick = () => (recOn ? recStopFn() : recStartFn());
+$('#rec').onclick = () => (rec.on ? recStopFn() : recStartFn());
 
 
 /* =============================================================================
@@ -6357,8 +6500,7 @@ $('#stop').onclick = () => transport.stop(true);          // stop + rewind
 transport.on('play',  () => { $('#play').classList.add('on');    $('#play').textContent = '❙❙'; });
 transport.on('stop',  () => { $('#play').classList.remove('on'); $('#play').textContent = '▶';  });
 transport.on('tempo', ({ bpm }) => { $('#bpm').value = bpm; });
-/* BPM: type a value, or drag the field vertically.
-   userTempo() is defined in Patch 1 (undo/redo); until then use transport.setTempo. */
+/* BPM: type a value, or drag the field vertically (undoable via userTempo). */
 const bpmEl = $('#bpm');
 bpmEl.addEventListener('change', () => userTempo(+bpmEl.value));
 bpmEl.addEventListener('pointerdown', e => {
@@ -6371,7 +6513,7 @@ bpmEl.addEventListener('pointerdown', e => {
   bpmEl.addEventListener('pointerup', up);
 });
 
-$('#mvol').addEventListener('input', e => setAP(masterGain.gain, +e.target.value, .02));
+$('#mvol').addEventListener('input', e => { if (ENGINE.masterGain) setAP(ENGINE.masterGain.gain, +e.target.value, .02); });
 
 $('#fit').onclick  = fitView;
 $('#help').onclick = () => $('#helpov').classList.remove('hide');
@@ -6388,8 +6530,23 @@ $('#bounce').onclick  = () => exportUI.open();
 
 
 
+/** Is a modal overlay (splash, help, library, bounce) visible? */
+const anyDialogOpen = () => [...document.querySelectorAll('.ov')].some(o => !o.classList.contains('hide'));
+/** Esc: close library/help/bounce dialogs and the song panel, leave piano/learn modes, deselect. */
+function closeAllPanels() {
+  $('#libov').classList.add('hide'); $('#helpov').classList.add('hide');
+  exportUI.close();                                    // refuses while a render is running
+  songUI.close();
+  if (noteInput.qwerty) noteInput.setQwerty(false);
+  if (noteInput.learn)  noteInput.setLearn(false);
+  if (document.activeElement && isTextTarget(document.activeElement)) document.activeElement.blur();
+  select(null);
+}
 window.addEventListener('keydown', e => {
-  if (HEADLESS || isTextTarget(e.target)) return;     // never steal keys from fields / during render
+  if (HEADLESS) return;                                // never react during an offline render
+  if (e.key === 'Escape') { closeAllPanels(); return; }
+  if (isTextTarget(e.target)) return;                  // never steal keys from fields
+  if (anyDialogOpen()) return;                         // splash/help/library/bounce are modal for shortcuts
   if (noteInput.handleKeyDown(e)) return;              // computer-keyboard piano (when enabled)
   const mod = e.ctrlKey || e.metaKey;
   const k   = e.key.toLowerCase();
@@ -6413,11 +6570,6 @@ window.addEventListener('keydown', e => {
   else if (k === 'l') $('#plib').click();
   else if (k === 's') songUI.toggle();
   else if (k === 'k') noteInput.setQwerty(true);       // (when piano keys are on, K plays a note instead)
-  else if (e.key === 'Escape') {
-    $('#libov').classList.add('hide'); $('#helpov').classList.add('hide');
-    noteInput.setQwerty(false); noteInput.setLearn(false);
-    select(null);
-  }
   else if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selConn) disconnect(selConn);
     else removeModules(selectedMods());
@@ -6457,13 +6609,18 @@ const noteInput = {
   on(note, vel, ch) {
     if (HEADLESS) return;
     this.listeners(ch).forEach(m => m.noteOn(note, vel));
-    modules.forEach(m => { if (m.recNote && m.state.rec) m.recNote(note, vel); });   // record-armed SEQs
+    this.record(note, vel);
   },
   off(note, ch) {
     if (HEADLESS) return;
     this.listeners(ch).forEach(m => m.noteOff(note));
   },
   panic() { modules.forEach(m => m.allOff && m.allOff()); this._down.clear(); },
+  /** Write a note into every record-armed SEQ (QWERTY, MIDI and on-screen keys). */
+  record(note, vel) {
+    if (HEADLESS) return;
+    modules.forEach(m => { if (m.recNote && m.state.rec) m.recNote(note, vel); });
+  },
 
   /* ---------------- computer keyboard ---------------- */
   setQwerty(on) {
@@ -6803,7 +6960,8 @@ const songUI = (() => {
       }
     }
   }
-  return { toggle, tick };
+  function close() { if (root.classList.contains('open')) toggle(); }
+  return { toggle, tick, close };
 })();
 
 
@@ -6849,7 +7007,7 @@ async function renderOffline({ bars, tail, stems, onProgress }) {
 
   const off = new OfflineAudioContext(nCh, Math.ceil(secs * sr), sr);
   const eng = createEngine(off);
-  await eng.init({ workletSrc: CRUSH_SRC });
+  await eng.init({ workletSrc: WORKLET_SRC });
   eng.masterGain.gain.value = +$('#mvol').value;                // same level as the live master slider
   wireTransport(eng);
   eng.transport.setTempo(patch.bpm);
@@ -6990,7 +7148,7 @@ const exportUI = (() => {
   }
   $('#exgo').onclick = go;
   $('#exclose').onclick = close;
-  return { open };
+  return { open, close };
 })();
 
 
@@ -7002,7 +7160,9 @@ const exportUI = (() => {
  * module is built.
  * ==========================================================================*/
 async function boot(which) {
-  await ENGINE.init({ workletSrc: CRUSH_SRC });   // noise, wavetables, worklet
+  if (ENGINE.ac) return;                           // already booted (double click on the splash)
+  startAudio();                                    // synchronous part of the click = user gesture
+  await ENGINE.init({ workletSrc: WORKLET_SRC });  // noise, wavetables, worklets
 
   refreshPresets();
   $('#splash').classList.add('hide');

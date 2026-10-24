@@ -9,10 +9,9 @@ patterns, arrange them into a song, and bounce the result to WAV. Patches are sa
 in the browser, exported as JSON, or **shared as a self-contained URL**: the whole rack
 is compressed into the link's `#hash`, so no server is ever involved.
 
-> **Status note:** a code review found 4 critical, 4 high and 10 medium issues. All
-> of them are fixed in this revision and were re-verified in headless Chromium. See
-> [§ 14 Changelog & known issues](#14-changelog--known-issues) for what changed and
-> for the remaining low-severity items.
+> **Status note:** a code review found 4 critical, 4 high, 10 medium and 12 low
+> issues. All 30 are fixed in this revision and were re-verified in headless
+> Chromium. See [§ 14 Changelog & known issues](#14-changelog--known-issues).
 
 ---
 
@@ -47,11 +46,14 @@ is compressed into the link's `#hash`, so no server is ever involved.
 **Hosting:** copy `index.html` to any static host (GitHub Pages, S3, Netlify, a USB
 stick). Nothing else is required.
 
-**`file://` vs `http(s)://`:** in Chromium, the CRUSH module's AudioWorklet fails to
-load from a `file://` page, so the app falls back to a `ScriptProcessorNode`. The
-start-up toast reads *"ready · fallback dsp"* instead of *"ready · worklet dsp
-online"*. Serving the file over HTTP, even with `python3 -m http.server`, enables the
-worklet. With it, CRUSH parameters can be modulated at audio rate.
+**`file://` and `http(s)://` both work.** The AudioWorklets (CRUSH DSP and the
+recorder tap) load from a Blob URL; where that is refused (Chromium on `file://`) they
+fall back to a `data:` URL. Only browsers without AudioWorklet use the
+`ScriptProcessorNode` fallback; the start-up toast then reads *"ready · fallback dsp"*
+instead of *"ready · worklet dsp online"*.
+
+No AudioContext exists until you click a splash button, so browsers don't log
+autoplay warnings.
 
 ---
 
@@ -72,6 +74,10 @@ Connection rules (`canConnect`):
 * `sig` out → `sig` in **or** any modulatable knob.
 * Exact duplicate cables are refused (the existing one is returned).
 * An input may receive several cables; they sum (Web Audio semantics).
+* Feedback is allowed. A cable that closes an audio loop is automatically routed
+  through a one-render-quantum delay (≈ 3 ms), which the Web Audio spec requires for
+  cycles. Without it, Firefox/Safari would mute the loop. The inspector marks such
+  cables "feedback (+3 ms)".
 
 ### Cable depth (attenuverter)
 
@@ -142,7 +148,7 @@ A single beat-based clock (`createTransport`) drives everything tempo-related:
 | **bpm** | Type a tempo, or drag the field up/down. Undoable (drags coalesce). |
 | **001.1.1** | Transport position (bar.beat.sixteenth). |
 | **●** (rec) | Real-time recording of the master output to a 16-bit stereo WAV (§ 10). |
-| **bars** | 0 = record until you press ● again; N = auto-stop after N bars. |
+| **bars** | 0 = record until you press ● again; N = exactly N bars, starting on the next bar line (§ 10). |
 | **⌨** | Toggle the computer-keyboard piano (also **K**). |
 | **MIDI** | Request Web MIDI access and listen to all inputs (hot-plug aware). |
 | **learn** | MIDI-learn mode: click a control, then move a hardware knob. |
@@ -203,7 +209,7 @@ Splash, Help, Patch Library and Bounce dialogs. Toast messages appear bottom-cen
 | Any jack | right-click | Unplug everything on that jack. |
 | Cable | click | Select it and edit its depth in the inspector. |
 | Cable | right-click | Cut it. |
-| Knob | drag up/down | Change the value (**Shift** = fine ×¼). One undo step per drag. |
+| Knob | drag up/down | Change the value (**Shift** = fine ×¼; you can press or release Shift mid-drag without a jump). One undo step per drag. |
 | Knob | wheel | Change the value (**Shift** = fine). Consecutive ticks merge into one undo step. |
 | Knob | double-click | Reset to default. |
 | Knob | **Alt**+drag | Trim the depth of the *newest* modulation cable on it. |
@@ -232,9 +238,10 @@ Splash, Help, Patch Library and Bounce dialogs. Toast messages appear bottom-cen
 | **L** | Open library |
 | **S** | Toggle song arranger |
 | **K** | Enable the QWERTY piano |
-| **Esc** | Close library/help, disable piano & MIDI learn, deselect |
+| **Esc** | Close library/help/bounce dialogs and the song panel, disable piano & MIDI learn, leave a text field, deselect (works even while typing) |
 
-Keys are ignored while the focus is in a text field, and during an offline render.
+Keys are ignored while the focus is in a text field, during an offline render, and
+while a dialog (splash, help, library, bounce) is open; **Esc** always works.
 
 **QWERTY piano** (when ⌨ is on): `A W S E D F T G Y H U J K O L P ; '` play
 chromatically from C upward (the A key plays the base note, C4 by default).
@@ -431,7 +438,7 @@ echo driven into runaway.
 | Wobble | 0…1 | 0 | audio, 0.01 | Flutter depth (up to 4 ms). |
 | W.Rate | 0.05…8 Hz | 0.4 | audio, 4 | Flutter rate. |
 | Mix | 0…1 | 0.35 | audio (wet), 0.5 | Dry is reduced to `1 − 0.35·mix`. |
-| Freeze (toggle) | – | off | – | Closes the input and sets feedback to 1.0: an infinite loop. |
+| Freeze (toggle) | – | off | – | Closes the input and sets feedback to 1.0: an infinite loop. While frozen, turning Fb has no effect until you unfreeze. |
 
 ### 5.8 REVERB — generated convolution reverb (`rev`)
 
@@ -612,7 +619,7 @@ red outline marks the step-record cursor.
 | Scale | Chromatic, Major, Minor, Dorian, Phrygian, Lydian, Mixolyd, HarmMin, PentMin, PentMaj, Blues, Whole | PentMin | – | Notes snap to the nearest degree. |
 | Root | C…B | C | – | Scale root (also transposes). |
 | Steps | 1…32 | 16 | ctrl | Pattern length. |
-| Swing | 0…0.7 | 0 | ctrl | Even steps are lengthened by (1+sw), odd steps shortened by (1−sw). |
+| Swing | 0…0.7 | 0 | ctrl | Even steps of the *beat grid* are lengthened by (1+sw), odd ones shortened by (1−sw). Because it follows the grid (not the pattern index), the feel stays put with odd lengths and non-forward directions. |
 | Oct | −3…+3 | 0 | ctrl | Octave transpose. |
 | Transp | ±12 st | 0 | ctrl | Semitone transpose (applied after the scale). |
 | Human | 0…1 | 0 | ctrl | Random velocity reduction (up to 50 %) and −6…+12 ms timing jitter. |
@@ -650,16 +657,16 @@ red outline marks the step-record cursor.
 
 ### Recording
 
-With **● rec** armed, notes from the **QWERTY piano or Web MIDI** are written into the
-current pattern:
+With **● rec** armed, notes from the **QWERTY piano, Web MIDI or a KEYS module's
+on-screen keyboard** are written into the current pattern:
 
 * **Stopped = step record.** Each note fills the next step and advances the cursor.
 * **Playing = live record.** The note snaps to the nearest step (a note played more
   than half a step late, in forward mode, goes to the next step).
 
-Incoming notes are converted back to scale degrees relative to Root/Transp/Oct and
-folded into the 0…24 range. Notes played on a KEYS module's *on-screen* keyboard are
-not recorded (see issue L9).
+Notes played on a KEYS module's *on-screen* keyboard are recorded too. Incoming notes
+are converted back to scale degrees relative to Root/Transp/Oct and folded into the
+0…24 range.
 
 ### Transport locking
 
@@ -795,10 +802,18 @@ in a text file.
 
 ### ● Real-time recorder
 
-* Taps the post-limiter master and records until you press ● again, or for **bars**
-  bars measured from the moment you press it.
-* Writes a 16-bit stereo WAV named `modular-<timestamp>.wav`.
-* Uses a `ScriptProcessorNode`.
+* Taps the post-limiter master (what you hear) and writes a 16-bit stereo WAV named
+  `modular-<timestamp>.wav`.
+* **bars = 0:** records from the click until you press ● again.
+* **bars = N:** records **exactly N bars**, starting on the **next bar line**:
+  * If the transport is stopped, ● starts it, and the take begins with the transport.
+  * The end is defined in beats, so tempo changes during the take are honoured.
+  * Stopping the transport early ends the take there.
+  * A toast says which bar the take starts on.
+* Capture runs on the audio thread in the `rec-tap` AudioWorklet, so UI activity
+  can't cause dropouts. Every block is time-stamped and the file is cropped
+  sample-exactly (e.g. 2 bars at 120 BPM = 4.000 s). Browsers without AudioWorklet
+  use a ScriptProcessor fallback with the same cropping.
 
 ### Bounce (offline render)
 
@@ -841,7 +856,7 @@ Further details:
 | Name | Contents |
 |---|---|
 | **init / Empty Rack** | OUT → SCOPE. |
-| **acid** (128 BPM) | SEQ (PentMin, swing, slides, a ratchet) → OSC saw + sub → FILTER 24 dB (resonant; modulated by ENV + a slow LFO) → CRUSH → VCA (ENV + velocity) → ECHO 1/8T → OUT → SCOPE. |
+| **acid** (128 BPM) | SEQ (PentMin, swing, slides, a ratchet) → OSC saw + sub → FILTER 24 dB (resonant; modulated by ENV + a slow LFO) → CRUSH → VCA (opened by the ENV, whose velocity sensitivity carries the accents, so it closes fully between notes) → ECHO 1/8T → OUT → SCOPE. |
 | **drums** (122 BPM) | Three SEQ→DRUM lanes (kick, snare, hat; velocity → level) → MIXER → REVERB → OUT → SCOPE in *stack* mode. |
 | **ambient** (68 BPM) | Slow Lydian SEQ with slides → two OSCs (glass + organ, detuned; random LFO drift) → FILTER (LFO + ENV) → VCA (long ENV) → ECHO → REVERB → OUT → SCOPE in XY mode. |
 
@@ -867,7 +882,7 @@ than JSON.
 | § | Section | Responsibility |
 |---|---|---|
 | 1 | Tiny helpers | `h`, `$`, `clamp`, `lerp`, `rnd`, `toast`; global context-menu suppression |
-| 2 | Audio engine core | `createEngine` (context, master chain, noise, wavetables, worklet), `ENGINE` singleton, crusher worklet source |
+| 2 | Audio engine core | `createEngine` (detached or attached; master chain, noise, wavetables, worklets), `ENGINE` singleton, `startAudio`, worklet source |
 | 3 | Music theory & clock | `NOTE`, `mtof`, `noteName`, `SCALES`, `quantN`, `DIVS`, `createTransport`, `fmtPos` |
 | 4 | Parameter system | value↔knob mapping, formatting, class `P`, widget factories |
 | 5 | Patch state & view | registries (`modules`, `conns`, `liveParams`, `tapped`), transport↔module wiring, rack context, pan/zoom, **undo/redo history** |
@@ -890,16 +905,24 @@ than JSON.
 
 ### Engine
 
-`createEngine(ac)` wraps an `AudioContext` *or* an `OfflineAudioContext`, and exposes:
+`createEngine(ac)` wraps an `AudioContext` *or* an `OfflineAudioContext`. Pass `null`
+to create it detached: the transport exists immediately, and `attach(ac)` later builds
+the master chain. The live app does exactly that. `ENGINE = createEngine(null)` at
+load, and `startAudio()` (called synchronously from the splash click in `boot()`)
+creates the AudioContext inside the user gesture. Offline renders pass their context
+directly. The engine exposes:
 
-* `ac`, `now()`
+* `ac` (null until attached), `attach(ac)`, `now()` (0 while detached)
 * `setAP(param, value, tc)`: a click-free `setTargetAtTime`.
 * `cah(param, t)`: cancel-and-hold.
 * `bus`/`masterGain`, `masterAna`
 * `noise {white, pink}`, `waves` (PeriodicWaves), `hasWorklet`
 * `transport`
 * `init({workletSrc})`: async; creates the noise buffers and wavetables, and registers
-  the worklet from a Blob URL.
+  the worklets (`crusher` and `rec-tap`) from a Blob URL, falling back to a `data:` URL.
+
+App-shell code (toolbar, recorder, scheduler) uses the thin wrappers `now()`,
+`setAP()`, `transport` and the `AC` variable (null before `startAudio()`).
 
 Modules **must** take everything from `m.ctx` (the engine they were built on) rather
 than from globals. This is what lets the same `build()` run on the offline engine.
@@ -920,7 +943,8 @@ Helpers on `m`:
 
 * `m.param(def)`, `m.knobs([defs], host?)`
 * `m.addIn(def)`, `m.addOut(def)`: `{id, label, kind:'sig'|'trig', node?, onTrig?, onRel?}`
-* `m.viz(height)` → a HiDPI 2D context (`ctx.canvas.W/H` in CSS pixels)
+* `m.viz(height)` → a HiDPI 2D context (`ctx.canvas.W/H` in CSS pixels), registered in
+  `m.vizList` so it is re-rasterised when `devicePixelRatio` changes
 * `m.label(text)`, `m.node(audioNode)` (registers the node for teardown),
   `m.setCollapsed(flag)`
 
@@ -935,6 +959,7 @@ Optional hooks a module sets:
 | `m.onStop(rewind)` | transport stop | (no module implements it yet) |
 | `m.setT()` | tempo change | recompute tempo-synced times (ECHO, LFO) |
 | `m.free()` | `removeModule` | per-instance teardown (LFO oscillator, KEYS held notes, REVERB timer) |
+| `m.onDpr(ratio)` | `devicePixelRatio` changed | resize extra canvases not created with `m.viz` (SCOPE's trail buffer) |
 | `m.trigNow(t, vel, dur)` | – | manual trigger convenience |
 
 Optional `def` hooks:
@@ -1037,13 +1062,15 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `createEngine(ac)` | Build an engine around a (possibly offline) context: master chain, `setAP`, `cah`, transport and async `init`. |
 | `mkSoftClip(ac)` | Brick-wall soft clipper (`{input, output}`): linear below 0.8, `tanh` knee, ceiling ±0.99, 2× oversampled. Used on the master bus and in each OUT limiter. |
-| `engine.init({workletSrc})` | Resume the context; create noise buffers and wavetables; register the crusher worklet. |
+| `engine.attach(ac)` | Bind a context and build the master chain (idempotent). |
+| `engine.init({workletSrc})` | Resume the context; create noise buffers and wavetables; register the worklets (Blob URL, then `data:` URL). |
+| `startAudio()` | Create the live AudioContext on the first user gesture, attach it, apply the master slider. |
 | `mkNoise(ac, pink)` | Create a 3 s mono noise buffer: white (uniform) or pink (Paul Kellet filter), normalised to a 0.95 peak. |
 | `mkWave(ac, table, name, harmonics)` | Build a `PeriodicWave` from a cosine harmonic list. |
 | `initTables(ac, table)` | Define the `organ`, `glass`, `vocal` and `digi` wavetables. |
 | `setPlay(p)` | Legacy play/stop wrapper (unused). |
 | `clock` | Legacy facade: `clock.bpm` get/set, `clock.playing`. |
-| `CRUSH_SRC` | AudioWorkletProcessor source for `crusher`. |
+| `WORKLET_SRC` | AudioWorklet source: `crusher` (bit crusher DSP) and `rec-tap` (recorder capture, 4096-frame time-stamped chunks). |
 
 ### § 3 Music & transport
 
@@ -1051,7 +1078,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `noteName(m)` | MIDI number → `"C4"`. |
 | `mtof(m)` | MIDI number → Hz (A4 = 440). |
-| `quantN(n, scale, root)` | Snap semitone `n` to the nearest scale degree relative to `root`. |
+| `quantN(n, scale, root)` | Snap semitone `n` to the nearest scale degree relative to `root`, considering the neighbouring octaves (ties resolve downward). |
 | `createTransport(engine)` | Beat clock with `on/emit`, `beatSec`, `beatAt`, `timeAt`, `setTempo`, `play(fromBeat?, delay = 0.08)`, `stop`, `seek`, `setLoop`, `loopCrossing` and `wrapLoop`. Live playback starts 80 ms ahead for clean scheduling; offline renders pass `delay = 0`. |
 | `fmtPos(beat)` | Beat → `"003.2.4"`. |
 
@@ -1098,7 +1125,8 @@ Line numbers are approximate (they refer to the current `index.html`).
 |---|---|
 | `mkTap(jack)` | Attach a 32-sample analyser so JS can read the jack's CV. |
 | `canConnect(from, to)` | Type rules. |
-| `connect(from, to, amount?)` | Create a connection (gain node, SVG, bookkeeping, undo). |
+| `connect(from, to, amount?)` | Create a connection (gain node, SVG, bookkeeping, undo). If the cable closes an audio loop, it is routed through a one-render-quantum `DelayNode` (`c.dly`, ≈ 3 ms) and the inspector shows "feedback (+3 ms)". |
+| `audioPathExists(a, b)` | Is there an audio path from module `a` to module `b` (cables into jacks or audio-rate params)? Used by the feedback guard. |
 | `setAmount(c, a)` | Apply depth (scaled into parameter units for modulation). |
 | `disconnect(c)` | Remove the connection (records undo first). |
 | `rewireParam(p, targets)` | Move modulation cables to new AudioParams (used by LFO waveform changes). |
@@ -1144,6 +1172,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | Function | Description |
 |---|---|
 | `frame(t)` | Main rAF loop. |
+| `rescaleCanvases()` | Re-rasterise every module canvas (`m.vizList`) when `devicePixelRatio` changes (monitor switch / browser zoom); modules with extra canvases implement `m.onDpr(ratio)` (SCOPE). |
 | `migrate(d)` | Validate and upgrade schema (`MIGRATIONS`). |
 | `modById(id)` | Module lookup. |
 | `exportModule(m)` | Module → JSON (`id, t, n, x, y, c, p, s, mc`). |
@@ -1162,7 +1191,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 | Function | Description |
 |---|---|
-| `libRead()` / `libWrite(u)` | localStorage library I/O. |
+| `libRead()` / `libWrite(u)` | localStorage library I/O. `libRead` returns a null-prototype object, so any name (even `__proto__`) is an ordinary key. |
 | `patchBlob(name)` | `serialize()` + name + date. |
 | `uniqueName(n, u)` | "foo" → "foo 2". |
 | `dl(obj, filename)` | Download JSON. |
@@ -1182,22 +1211,27 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 | Function | Description |
 |---|---|
-| `recStartFn()` / `recStopFn()` | Real-time recorder. |
-| `encodeWav(L, R, len, sr)` | 16-bit WAV from Float32 blocks (recorder). |
+| `rec` | Recorder state: `{on, node, blocks, tStart, endBeat, tEnd, startBar…}`. |
+| `recStartFn()` | Arm the tap; in bars mode, start the transport if needed and pick the next bar line. |
+| `recBlock(t0, L, R)` | Receive a time-stamped block; finish once the end time is covered. |
+| `recEndTime()` | End of the take: fixed (manual/transport stop) or `transport.timeAt(endBeat)`. |
+| `recStopFn()` | Manual stop (with a 1 s watchdog in case blocks stop arriving). |
+| `recFinish(tEnd)` | Disconnect, crop to `[tStart, tEnd)`, encode with `encodeWavPCM(…, 16)` and download. |
 | `setMidi(p, ch, cc)` | Attach a MIDI CC mapping. |
-| `noteInput.*` | `listeners, on, off, panic, setQwerty, releaseQwerty, handleKeyDown, handleKeyUp, enableMidi, midiMsg, setLearn, armLearn, clearLearnTarget, cc`. |
+| `noteInput.*` | `listeners, on, off, panic, record, setQwerty, releaseQwerty, handleKeyDown, handleKeyUp, enableMidi, midiMsg, setLearn, armLearn, clearLearnTarget, cc`. `record(note, vel)` writes into every record-armed SEQ (used by QWERTY, MIDI and KEYS' on-screen keys). |
+| `anyDialogOpen()` / `closeAllPanels()` | Keyboard helpers: shortcuts are inert while a dialog is open; Esc closes everything. |
 | `song.*` | `bankFor(id, beat)`, `snapshot(prune)`, `restore(d)` (validated), `touch()`. |
 | `applySongToTransport()` | Sync the loop region. |
 | `songTick()` | Stop at the song end (song mode, no loop). |
 | `songCommit(label, before)` / `songEdit(label, fn)` | Undoable song edits. |
-| `songUI.toggle()` / `songUI.tick()` | Arranger panel (internal: `fits`, `trimToLength`, `syncHead`, `clipEl`, `renderGrid`). |
+| `songUI.toggle()` / `songUI.close()` / `songUI.tick()` | Arranger panel (internal: `fits`, `trimToLength`, `syncHead`, `clipEl`, `renderGrid`). |
 | `withHeadlessRack(engine, fn)` | Swap in a hidden rack bound to another engine, then restore. |
 | `renderOffline({bars, tail, stems, onProgress})` | Offline bounce → `{files:[{name, L, R}], sampleRate, seconds, capped}`. |
 | `encodeWavPCM(L, R, sr, bits)` | 16/24-bit PCM or 32-bit float WAV. |
 | `makeZip(files)` | Store-only ZIP writer (CRC-32). |
 | `downloadBlob(blob, name)` | Trigger a download. |
-| `exportUI.open()` | Bounce dialog (internal `go()`, `close()`). |
-| `boot(which)` | Engine init → load patch → autoplay. |
+| `exportUI.open()` / `exportUI.close()` | Bounce dialog (internal `go()`); `close()` refuses while a render runs. |
+| `boot(which)` | `startAudio()` → engine init → load patch → autoplay. Ignored if already booted. |
 
 ---
 
@@ -1235,23 +1269,41 @@ Compatibility notes:
   jack never worked).
 * Share links created before this fix still decode, and now *with* their patterns.
 
-### 14.2 Remaining known issues (low severity)
+### 14.2 Low-severity fixes
 
-| # | Issue |
-|---|---|
-| L1 | **Debug logging left in:** `console.log(ORDER)`, `console.log(DEFS)` and a log per palette type (≈ lines 5259–5264). |
-| L2 | **Malformed help HTML:** the "Edit:" `<li>` is never closed; the "Play"/"Song" items nest inside it; the orphan fragment "(Shift+click ⧉ does the same).</li>" renders after the Song item (≈ lines 629–635). |
-| L3 | **Dead or duplicated code:** unused `setPlay()`; an empty "AudioParam utilities" doc block (≈ line 957); `posEl.textContent` written twice per frame; `encodeWav` (recorder) duplicates `encodeWavPCM`; per-module boilerplate destructures unused `cah/BUS/WT/NZ_*`; a fresh `Float32Array(256)` is allocated every frame for the meter. |
-| L4 | **Docs drift in the file header:** the SECTION INDEX lists 1–18 only (19–21 exist); it describes the Recorder as "16-bit master tap" only; some comments mention "Patch S3/Step 6" leftovers. |
-| L5 | **Scale quantiser isn't octave-wrap aware:** `quantN` never considers the next octave's root, so in PentMaj a pitch class of 11 snaps down to 9 (distance 2) instead of up to 12 (distance 1). |
-| L6 | **Swing with odd step counts:** swing uses step-index parity, so with odd `Steps` the long/short feel flips every loop. |
-| L7 | **Acid preset drone:** SEQ Vel → VCA Gain at depth 0.9 keeps the VCA at ≥ 0.63 between notes, so the oscillator never fully closes; the ENV → VCA cable adds only the accent. |
-| L8 | **Echo Freeze:** turning the Fb knob while frozen overrides the frozen unity feedback. |
-| L9 | **Recording source mismatch:** the SEQ **● rec** tooltip promises recording from "KEYS", but notes played on a KEYS module's on-screen keyboard bypass `noteInput` and are not recorded. |
-| L10 | **Real-time recorder:** "bars" counts from the click, not from a bar line; it uses the deprecated `ScriptProcessorNode` on the main thread (UI jank can cause dropouts). |
-| L11 | **No feedback-cycle handling:** Web Audio mutes cycles that contain no `DelayNode`, so patching e.g. FILTER Out → FILTER In silently kills that path without any UI hint. |
-| L12 | **UI details:** the shortcut handler runs while overlays are open (Space plays behind the library). Esc does not close the bounce dialog or the song panel. Changing Shift mid-drag makes knobs jump (fine mode is computed from the drag origin). Canvas resolution is fixed at the `devicePixelRatio` of creation time. The worklet is blocked on `file://` in Chromium (see § 1). The AudioContext is constructed before any user gesture, which logs a warning. `localStorage` names such as `__proto__` misbehave in the library object. |
-| L13 | **Design notes from the fixes:** REVERB modulation is stepped (IR rebuilds), not smooth. Every LFO relock on play/seek/loop creates a fresh `OscillatorNode` (cheap, but visible in profilers). The soft clipper adds gentle saturation above −2 dBFS on the master. |
+| # | Problem | Fix | Verified result |
+|---|---|---|---|
+| L1 | Debug `console.log` calls in the palette code. | Removed. | No console output while booting any preset. |
+| L2 | Malformed help HTML (unclosed/nested `<li>`, orphan text). | Rewritten into well-formed *mouse / editing / playing & song* lists; also documents the feedback guard and bar-aligned recording. | No nested `li`, no stray text nodes. |
+| L3 | Dead or duplicated code. | Removed `setPlay()`, the empty AudioParam doc block, the duplicate per-frame `posEl` write and the recorder's duplicate `encodeWav`. Each module's engine destructure is trimmed to the names it uses. The meter reuses one buffer. | Syntax check plus the full regression suite. |
+| L4 | Stale section index and development-note comments. | Section index covers §§ 1–21 (with 5.5/6.5/9.5/9.6/15.5). The header documents the note protocol. "Patch/Step/Refactor" comments are replaced with section references. | – |
+| L5 | `quantN` ignored neighbouring octaves. | Candidates include ±12; exact ties resolve downward. | PentMaj pc 11 → 12; PentMin pc 11 (tie) → 10. |
+| L6 | Swing used pattern-index parity, so the feel flipped with odd lengths. | Swing uses an absolute grid counter `st.abs`. `locate()` derives it from the beat, and odd grid steps are placed swung-late. | 3-step pattern, swing 0.5: gaps 188/63/188/63… ms. |
+| L7 | Acid preset VCA never closed (≥ 0.63). | Vel → VCA cable removed; ENV → VCA at 1.0; accents via ENV Vel = 0.5. | VCA minimum 0.000. |
+| L8 | Fb knob overrode Echo Freeze. | Fb's `set()` is ignored while frozen; unfreezing restores the knob value. | Feedback stays at 1.0 after moving Fb while frozen. |
+| L9 | On-screen KEYS notes weren't recorded. | New `noteInput.record()` used by QWERTY, MIDI and the on-screen keyboard. | Clicking C4 in step-record writes step 1. |
+| L10 | Recorder started at the click, used ScriptProcessor on the main thread, and wasn't sample-exact. | New `rec-tap` AudioWorklet with time-stamped blocks (ScriptProcessor only as fallback). Bars mode starts on the next bar line, or with the transport if stopped; the end is defined in beats, and the take is cropped sample-exactly. | 2 bars @ 120 BPM = 4.0000 s; fallback: 1 bar @ 122 BPM = 1.967 s, first hit at the same offset as a bounce. |
+| L11 | Delay-less feedback loops are muted by spec-compliant browsers. | `connect()` detects loop-closing cables (`audioPathExists`) and inserts a one-quantum `DelayNode`; toast plus inspector hint. | Self-loop and downstream loop get 2.9 ms delays; normal cables don't. |
+| L12 | UI details. | Shortcuts are inert while a dialog is open. Esc closes everything (bounce, song, even from a text field). Knob drags are incremental (no jump on Shift). Canvases re-rasterise on `devicePixelRatio` changes (`rescaleCanvases`, SCOPE `m.onDpr`). Worklets fall back to a `data:` URL (work on `file://`). The AudioContext is created on the first click (`createEngine(null)` + `startAudio()`). The library uses null-prototype objects (`__proto__` is a valid name). | Space ignored under help; Esc closes help/bounce/song; Shift toggle mid-drag: 0.200 → 0.201 (no jump); canvas 414 → 828 px at DPR 2; worklet on `file://`: yes; `ENGINE.ac === null` before the click; `__proto__` patch stored and read back. |
+
+### 14.3 Known limitations and design notes
+
+* **REVERB modulation is stepped.** Size/Decay/Damp/Diffuse changes rebuild the
+  impulse response (at most ~7×/s, with fresh noise each time). Smooth sweeps need
+  PreDly/LowCut/HiCut/Mix.
+* **LFO relocking creates oscillators.** Every play/seek/loop relock of a synced LFO
+  creates a new `OscillatorNode` (cheap, but visible in profilers).
+* **Master soft clipper.** It adds gentle saturation above about −2 dBFS.
+* **Feedback guard is conservative.** It assumes every module passes its inputs to its
+  outputs, so it may add its 3 ms delay to a cable that doesn't strictly need it. It
+  also can't see loops that only become audio-rate later (e.g. an LFO Rate cable
+  becoming audio-rate when the LFO switches from a random to a periodic wave).
+* **Compressor latency.** The per-OUT and master compressors add a few milliseconds of
+  lookahead latency, visible as ~18 ms before the first hit in bounces/recordings of
+  drum patches. Timing *between* events is unaffected.
+* **Background tabs.** Browsers may throttle the 22 ms scheduler timer in hidden
+  tabs. Tabs that are playing audio are normally exempt, but this is
+  browser-dependent.
 
 ### 14.3 Testing
 
@@ -1260,7 +1312,10 @@ the page in headless Chromium with Playwright, using `page.evaluate` against the
 globals (`modules`, `connect`, `renderOffline`, `SHARE`, `history`…). Useful checks to
 keep:
 
-* Boot each preset and assert no console errors.
+* Boot each preset from `file://` and `http://` and assert no console output.
 * Bounce two bars and assert `0 < peak ≤ 0.99`.
 * Round-trip a share link and compare SEQ patterns.
 * Load a hostile link or file and assert the rack survives and nothing executes.
+* Record 2 bars at a known tempo and assert the WAV length.
+* Use real mouse events (Playwright `page.mouse`) for knob drags: synthetic
+  `PointerEvent`s can't take pointer capture.
