@@ -161,12 +161,15 @@ select{padding:5px 6px}
 #palette{
   background:linear-gradient(180deg,rgba(14,19,30,.92),rgba(8,11,18,.92));
   border-right:1px solid var(--line);display:flex;flex-direction:column;
-  align-items:center;gap:5px;padding:8px 0;overflow-y:auto;z-index:30;
+  align-items:center;gap:4px;padding:8px 0;overflow-y:auto;z-index:30;
   backdrop-filter:blur(10px);
 }
 #palette::-webkit-scrollbar{width:0}
+.pgrp{font:7px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+  width:46px;text-align:center;padding-top:6px;margin-top:2px;border-top:1px solid var(--line);flex:none}
+.pgrp:first-child{border-top:0;margin-top:0;padding-top:0}
 .pbtn{
-  width:46px;height:42px;border-radius:10px;display:flex;flex-direction:column;
+  width:46px;height:35px;border-radius:10px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:2px;background:rgba(255,255,255,.04);
   border:1px solid var(--line);cursor:grab;position:relative;flex:none;
 }
@@ -293,6 +296,11 @@ canvas.viz{
 .kdot{fill:#fde047;filter:drop-shadow(0 0 4px #fde047)}
 .kind{stroke:#fff;stroke-width:1.8;stroke-linecap:round}
 
+.fxgrid{display:grid;gap:3px;flex:1;min-width:0;align-self:center;margin-left:4px}
+.fxgrid button{padding:3px 0;font-size:8.5px;min-width:0}
+.fxgrid .thumb{padding:2px}
+.fxgrid .thumb canvas{display:block;width:100%;height:14px;opacity:.75}
+.fxgrid .thumb.on canvas{opacity:1}
 .sel2{font-size:9.5px;padding:3px 4px;border-radius:6px;flex:1;min-width:0;
   background:rgba(0,0,0,.35)}                                  /* in-module select  */
 .tg{font-size:8.5px;padding:3px 6px;border-radius:6px;letter-spacing:.08em;
@@ -543,6 +551,7 @@ button.bk.pend{animation:rblink .6s infinite}
       <button data-p="acid">⚡ Acid Line</button>
       <button data-p="drums">◎ Drum Machine</button>
       <button data-p="ambient">☁ Ambient Drift</button>
+      <button data-p="filth">☢ Filth Lab</button>
       <button data-p="init">◻ Empty Rack</button>
     </div>
     <h3>quick keys</h3>
@@ -661,6 +670,14 @@ button.bk.pend{animation:rblink .6s infinite}
           (<kbd>Shift</kbd> = now). <b>bounce</b> renders audio faster than real time (optional stems).</li>
       <li>● record: with <b>bars</b> = N the take starts on the next bar line (or with the transport,
           if stopped) and is exactly N bars long.</li>
+    </ul>
+
+    <h3>fx lab</h3>
+    <ul>
+      <li><b>SMASH</b> multiband up/down compression · <b>GROWL</b> talking formant filter (patch an LFO
+          into Morph) · <b>SHIFT</b> frequency shifter spirals · <b>STUTTER</b> beat repeat / roll / tape stop
+          (hold the pad, patch a gate, or set Chance) · <b>PUMP</b> drawable sidechain (patch a kick gate
+          into Trig; Env out ducks anything).</li>
     </ul>
 
     <div class="big"><button id="helpclose">close</button></div>
@@ -1081,7 +1098,413 @@ class RecTap extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('rec-tap', RecTap);`;
+registerProcessor('rec-tap', RecTap);
+
+/* Fast tanh (Padé 3/2, exact ±1 at |x| = 3, < 2 % error): saturation is where
+   approximation error is inaudible, and Math.tanh per sample per channel adds up. */
+function ftanh(x) { if (x >= 3) return 1; if (x <= -3) return -1; const x2 = x * x; return x * (27 + x2) / (27 + 9 * x2); }
+
+/* =====================================================================
+   FX WORKLETS (SMASH · GROWL · SHIFT · STUTTER)
+   Engine rules: block-constant fast paths, no allocation in process(),
+   silence early-out when unpatched, meters posted only when asked
+   (processorOptions.meters) and at ~35 Hz.
+   ===================================================================== */
+
+/* ---------------------------------------------------------------------
+   SMASH — 3-band upward + downward compressor (OTT-style)
+   Bands: Linkwitz-Riley 4th-order crossovers at 120 Hz and 2.5 kHz. The
+   low band also passes an LR4 allpass at 2.5 kHz so all three bands stay
+   phase-aligned and sum flat. Each band: linked-stereo envelope follower,
+   downward ratio 1..66 above its threshold, upward ratio 1..4 below its
+   lower threshold (faded out towards -80 dB so silence isn't pumped up).
+   --------------------------------------------------------------------- */
+class SmashProc extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    const k = (name, d, a, b) => ({ name, defaultValue: d, minValue: a, maxValue: b, automationRate: 'k-rate' });
+    return [k('depth', .6, 0, 1), k('time', .5, 0, 1), k('up', .5, 0, 1), k('down', .7, 0, 1),
+            k('lo', 0, -24, 24), k('mid', 0, -24, 24), k('hi', 0, -24, 24), k('out', 0, -24, 12)];
+  }
+  constructor(o) {
+    super();
+    const sr = sampleRate;
+    const bw = (type, f) => {                     // RBJ biquads, Q = 1/sqrt2 (Butterworth), normalised
+      const w = 2 * Math.PI * f / sr, c = Math.cos(w), al = Math.sin(w) * Math.SQRT1_2, a0 = 1 + al;
+      if (type === 'hp') return [(1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0];
+      if (type === 'lp') return [(1 - c) / 2 / a0,  (1 - c) / a0, (1 - c) / 2 / a0, -2 * c / a0, (1 - al) / a0];
+      return [(1 - al) / a0, -2 * c / a0, 1, -2 * c / a0, (1 - al) / a0];            // allpass
+    };
+    this.L1 = bw('lp', 120); this.H1 = bw('hp', 120); this.L2 = bw('lp', 2500); this.H2 = bw('hp', 2500);
+    /* LR4 low-pass + LR4 high-pass sums to ONE 2nd-order Butterworth allpass, so the
+       low band's phase compensation at 2.5 kHz costs 1 biquad instead of 4 */
+    this.A2 = bw('ap', 2500);
+    this.s = [new Float64Array(18), new Float64Array(18)];   // 9 TDF2 biquads × 2 states, per channel
+    this.b = [0, 1].map(() => ({ lo: new Float32Array(128), rest: new Float32Array(128), mid: new Float32Array(128),
+                                 hi: new Float32Array(128), t: new Float32Array(128) }));
+    this.env = new Float64Array(3);
+    this.g = new Float64Array([1, 1, 1]);                    // smoothed linear band gains
+    this.gdb = new Float64Array(3);                          // last gain in dB (meters)
+    this.meters = !!(o && o.processorOptions && o.processorOptions.meters);
+    this.mb = new Float32Array(7); this.blk = 0; this.pk = 0;
+    this.tD = [-35, -30, -33]; this.tU = [-41, -42, -41];
+  }
+  /** one biquad over a whole block (tight loop = fast), state in s[j], s[j+1] */
+  stage(c, s, j, src, dst, n) {
+    const b0 = c[0], b1 = c[1], b2 = c[2], a1 = c[3], a2 = c[4];
+    let s1 = s[j], s2 = s[j + 1];
+    for (let i = 0; i < n; i++) {
+      const x = src[i], y = b0 * x + s1;
+      s1 = b1 * x - a1 * y + s2; s2 = b2 * x - a2 * y; dst[i] = y;
+    }
+    s[j] = s1; s[j + 1] = s2;
+  }
+  split(ch, src, n) {
+    const s = this.s[ch], B = this.b[ch];
+    if (B.t.length < n) for (const k in B) B[k] = new Float32Array(n);
+    this.stage(this.L1, s, 0, src, B.t, n);    this.stage(this.L1, s, 2, B.t, B.lo, n);
+    this.stage(this.H1, s, 4, src, B.t, n);    this.stage(this.H1, s, 6, B.t, B.rest, n);
+    this.stage(this.L2, s, 8, B.rest, B.t, n); this.stage(this.L2, s, 10, B.t, B.mid, n);
+    this.stage(this.H2, s, 12, B.rest, B.t, n); this.stage(this.H2, s, 14, B.t, B.hi, n);
+    this.stage(this.A2, s, 16, B.lo, B.lo, n);
+    return B;
+  }
+  process(inputs, outputs, p) {
+    const I = inputs[0], O = outputs[0];
+    if (!O || !O.length) return true;
+    const n = O[0].length;
+    if (!I || !I.length) {                                     // unpatched: silence, meters fall
+      for (let c = 0; c < O.length; c++) O[c].fill(0);
+      this.env.fill(0); this.post(0);
+      return true;
+    }
+    const sr = sampleRate, depth = p.depth[0], ts = Math.pow(10, (p.time[0] - .5) * 2);
+    const rD = 1 + 65 * p.down[0], rU = 1 + 3 * p.up[0];
+    const trim0 = p.lo[0], trim1 = p.mid[0], trim2 = p.hi[0], outG = Math.pow(10, p.out[0] / 20);
+    const aA0 = 1 - Math.exp(-1 / (.012 * ts * sr)), aR0 = 1 - Math.exp(-1 / (.18 * ts * sr));
+    const aA1 = 1 - Math.exp(-1 / (.008 * ts * sr)), aR1 = 1 - Math.exp(-1 / (.12 * ts * sr));
+    const aA2 = 1 - Math.exp(-1 / (.004 * ts * sr)), aR2 = 1 - Math.exp(-1 / (.09 * ts * sr));
+    const env = this.env, g = this.g, tD = this.tD, tU = this.tU;
+    const curve = (b, db) => {                                  // static gain (dB) at level db
+      if (db > tD[b]) return (tD[b] + (db - tD[b]) / rD) - db;
+      if (db < tU[b]) return Math.min(30, (tU[b] + (db - tU[b]) / rU) - db) * Math.min(1, Math.max(0, (db + 80) / 20));
+      return 0;
+    };
+    /* auto make-up: a -12 dBFS band leaves at -12 dBFS, so SMASH densifies instead of
+       just turning loud material down (meters still show the raw compression) */
+    const mk0 = -curve(0, -12) * depth, mk1 = -curve(1, -12) * depth, mk2 = -curve(2, -12) * depth;
+    const gainDb = (b, e, trim, mk) => {
+      const gg = curve(b, 20 * Math.log10(e + 1e-9));
+      this.gdb[b] = gg * depth;
+      return Math.pow(10, (gg * depth + trim + mk) / 20);
+    };
+    const mono = I.length < 2;
+    const BL = this.split(0, I[0], n), BR = mono ? BL : this.split(1, I[1], n);
+    const oL = O[0], oR = O.length > 1 ? O[1] : null;
+    let t0 = g[0], t1 = g[1], t2 = g[2], pk = this.pk;
+    for (let i = 0; i < n; i++) {
+      const lL = BL.lo[i], mL = BL.mid[i], hL = BL.hi[i], lR = BR.lo[i], mR = BR.mid[i], hR = BR.hi[i];
+      /* linked envelopes */
+      let v = Math.max(Math.abs(lL), Math.abs(lR)); env[0] += (v - env[0]) * (v > env[0] ? aA0 : aR0);
+      v = Math.max(Math.abs(mL), Math.abs(mR));     env[1] += (v - env[1]) * (v > env[1] ? aA1 : aR1);
+      v = Math.max(Math.abs(hL), Math.abs(hR));     env[2] += (v - env[2]) * (v > env[2] ? aA2 : aR2);
+      /* gain computer every 8 samples, smoothed per sample */
+      if ((i & 7) === 0) { t0 = gainDb(0, env[0], trim0, mk0); t1 = gainDb(1, env[1], trim1, mk1); t2 = gainDb(2, env[2], trim2, mk2); }
+      g[0] += (t0 - g[0]) * .08; g[1] += (t1 - g[1]) * .08; g[2] += (t2 - g[2]) * .08;
+      const yL = (lL * g[0] + mL * g[1] + hL * g[2]) * outG;
+      oL[i] = yL;
+      if (oR) oR[i] = mono ? yL : (lR * g[0] + mR * g[1] + hR * g[2]) * outG;
+      const a = Math.abs(yL); if (a > pk) pk = a;
+    }
+    this.pk = pk;
+    this.post(1);
+    return true;
+  }
+  post(active) {
+    if (!this.meters || ++this.blk < 10) return;
+    this.blk = 0;
+    const m = this.mb;
+    for (let b = 0; b < 3; b++) { m[b] = 20 * Math.log10(this.env[b] + 1e-9); m[3 + b] = active ? this.gdb[b] : 0; }
+    m[6] = this.pk; this.pk = 0;
+    this.port.postMessage(m);
+  }
+}
+registerProcessor('smash', SmashProc);
+
+/* ---------------------------------------------------------------------
+   GROWL — drive → 3 formant resonators (vowel morph U·O·A·E·I) → grit
+   Zero-delay-feedback (TPT) state-variable bandpasses; coefficients are
+   recomputed every 16 samples from the a-rate Morph, so an LFO or even
+   an audio-rate source can make it talk.
+   --------------------------------------------------------------------- */
+class GrowlProc extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'morph', defaultValue: .5, minValue: 0, maxValue: 1, automationRate: 'a-rate' },
+      { name: 'shift', defaultValue: 0, minValue: -24, maxValue: 24, automationRate: 'k-rate' },
+      { name: 'reso',  defaultValue: 1.5, minValue: .3, maxValue: 6, automationRate: 'k-rate' },
+      { name: 'drive', defaultValue: 4, minValue: 1, maxValue: 40, automationRate: 'k-rate' },
+      { name: 'grit',  defaultValue: .3, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'mix',   defaultValue: 1, minValue: 0, maxValue: 1, automationRate: 'k-rate' }
+    ];
+  }
+  constructor() {
+    super();
+    /* bass-voice formants: U O A E I  (Hz, bandwidth Hz, level dB) */
+    this.F = [[350, 600, 2400], [400, 750, 2400], [600, 1040, 2250], [400, 1620, 2400], [250, 1750, 2600]];
+    this.B = [[40, 80, 100], [40, 80, 100], [60, 70, 110], [40, 80, 100], [60, 90, 100]];
+    this.G = [[0, -14, -26], [0, -8, -18], [0, -4, -8], [-2, 0, -6], [-6, 0, -3]]
+      .map(r => r.map(db => Math.pow(10, db / 20)));
+    this.MK = [.795, 1.036, 1.15, 1.244, .935];     // per-vowel make-up, measured: equal loudness across the morph
+    this.lf = this.F.map(r => r.map(Math.log));
+    this.s = [new Float64Array(6), new Float64Array(6)];
+    this.c = new Float64Array(12);                  // per formant: a1, a2, a3, gain
+    this.lm = -1; this.lmul = 0; this.lr = 0;        // last coefficient inputs
+  }
+  coeffs(m, mul, reso) {
+    const sr = sampleRate, q = Math.min(3.9999, Math.max(0, m * 4)), i = q | 0, f = q - i;
+    for (let k = 0; k < 3; k++) {
+      const fr = Math.min(sr * .45, Math.max(30, Math.exp(this.lf[i][k] + (this.lf[i + 1][k] - this.lf[i][k]) * f) * mul));
+      const bw = this.B[i][k] + (this.B[i + 1][k] - this.B[i][k]) * f;
+      const amp = (this.G[i][k] + (this.G[i + 1][k] - this.G[i][k]) * f) * (this.MK[i] + (this.MK[i + 1] - this.MK[i]) * f);
+      const Q = Math.max(.5, fr / bw * .35 * reso), g = Math.tan(Math.PI * fr / sr), kk = 1 / Q;
+      const a1 = 1 / (1 + g * (g + kk)), a2 = g * a1;
+      this.c[k * 4] = a1; this.c[k * 4 + 1] = a2; this.c[k * 4 + 2] = g * a2; this.c[k * 4 + 3] = kk * amp;
+    }
+  }
+  process(inputs, outputs, p) {
+    const I = inputs[0], O = outputs[0];
+    if (!O || !O.length) return true;
+    const n = O[0].length;
+    if (!I || !I.length) { for (let c = 0; c < O.length; c++) O[c].fill(0); return true; }
+    const mul = Math.pow(2, p.shift[0] / 12), reso = p.reso[0], dr = p.drive[0];
+    const norm = 1 / ftanh(Math.max(1, dr)), grit = p.grit[0], gk = 1 + grit * 10, mix = p.mix[0];
+    const M = p.morph, aRate = M.length > 1, c = this.c;
+    for (let i0 = 0; i0 < n; i0 += 16) {
+      const mo = aRate ? M[i0] : M[0];
+      if (mo !== this.lm || mul !== this.lmul || reso !== this.lr) {        // skip when nothing moved
+        this.coeffs(mo, mul, reso); this.lm = mo; this.lmul = mul; this.lr = reso;
+      }
+      const i1 = Math.min(n, i0 + 16);
+      for (let ch = 0; ch < O.length; ch++) {
+        const inp = I[Math.min(ch, I.length - 1)], out = O[ch], s = this.s[ch];
+        for (let i = i0; i < i1; i++) {
+          const dry = inp[i], x = ftanh(dry * dr) * norm;
+          let y = 0;
+          for (let k = 0; k < 3; k++) {
+            const j = k * 2, b = k * 4;
+            const v3 = x - s[j + 1], v1 = c[b] * s[j] + c[b + 1] * v3, v2 = s[j + 1] + c[b + 1] * s[j] + c[b + 2] * v3;
+            s[j] = 2 * v1 - s[j]; s[j + 1] = 2 * v2 - s[j + 1];
+            y += v1 * c[b + 3];
+          }
+          y *= 2.2;                                            // make-up for the narrow bands
+          if (grit > .001) y += grit * (ftanh(y * gk) * .9 - y);
+          out[i] = dry * (1 - mix) + y * mix;
+        }
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('growl', GrowlProc);
+
+/* ---------------------------------------------------------------------
+   SHIFT — Bode frequency shifter + feedback delay (spirals / barber pole)
+   Hilbert pair: two 4-section allpass chains (Niemitalo coefficients),
+   ~90° apart over the audio band. up = I·cos − Q·sin, down = I·cos + Q·sin.
+   Modes: 0 up · 1 down · 2 wide (L up / R down) · 3 ring (x · cos).
+   Shift is normalised −1..1 → ±2500 Hz cubed (fine control near zero).
+   --------------------------------------------------------------------- */
+class ShiftProc extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'shift', defaultValue: .3, minValue: -1, maxValue: 1, automationRate: 'a-rate' },
+      { name: 'fb',    defaultValue: .5, minValue: 0, maxValue: .97, automationRate: 'k-rate' },
+      { name: 'delay', defaultValue: 90, minValue: 1, maxValue: 1000, automationRate: 'k-rate' },
+      { name: 'mix',   defaultValue: .7, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'mode',  defaultValue: 0, minValue: 0, maxValue: 3, automationRate: 'k-rate' }
+    ];
+  }
+  constructor() {
+    super();
+    this.ca = [0.6923878, 0.9360654322959, 0.9882295226860, 0.9987488452737].map(a => a * a);
+    this.cb = [0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278].map(a => a * a);
+    this.h = [new Float64Array(32), new Float64Array(32)];   // 8 sections × (x1,x2,y1,y2) per channel
+    this.qd = new Float64Array(2);                           // 1-sample delay on path B
+    this.ph = 0;
+    this.N = Math.ceil(sampleRate * 1.01) + 2;
+    this.buf = [new Float32Array(this.N), new Float32Array(this.N)];
+    this.w = 0; this.quiet = 0;
+  }
+  process(inputs, outputs, p) {
+    const I = inputs[0], O = outputs[0];
+    if (!O || !O.length) return true;
+    const n = O[0].length, sr = sampleRate;
+    const fb = p.fb[0], mix = p.mix[0], mode = Math.round(p.mode[0]);
+    const has = I && I.length;
+    /* unpatched and the feedback tail has died out: nothing to compute */
+    if (!has) { if (fb < .001 || ++this.quiet > 2000) { for (let c = 0; c < O.length; c++) O[c].fill(0); return true; } }
+    else this.quiet = 0;
+    const d = Math.max(1, Math.min(this.N - 2, Math.round(p.delay[0] * sr / 1000)));
+    const S = p.shift, aRate = S.length > 1, TAU = 2 * Math.PI;
+    let hz = 2500 * S[0] * S[0] * S[0], dph = TAU * hz / sr, ph = this.ph;
+    const ca = this.ca, cb = this.cb, N = this.N;
+    /* constant shift: rotate the carrier phasor by a fixed step (no cos/sin per sample) */
+    const cd = Math.cos(dph), sd = Math.sin(dph);
+    let co = Math.cos(ph), si = Math.sin(ph);
+    for (let i = 0; i < n; i++) {
+      if (aRate) {
+        const v = S[i]; hz = 2500 * v * v * v; dph = TAU * hz / sr;
+        ph += dph; if (ph > TAU) ph -= TAU; else if (ph < 0) ph += TAU;
+        co = Math.cos(ph); si = Math.sin(ph);
+      } else {
+        const nc = co * cd - si * sd; si = si * cd + co * sd; co = nc;
+      }
+      let r = this.w - d; if (r < 0) r += N;
+      for (let ch = 0; ch < O.length; ch++) {
+        const inp = has ? I[Math.min(ch, I.length - 1)][i] : 0;
+        const xin = inp + fb * ftanh(this.buf[ch][r]);
+        let y;
+        if (mode === 3) y = xin * co;                          // ring modulation
+        else {
+          const h = this.h[ch];
+          let a = xin, b = xin;
+          for (let k = 0; k < 4; k++) {                        // path A (I)
+            const j = k * 4, o = ca[k] * (a + h[j + 3]) - h[j + 1];
+            h[j + 1] = h[j]; h[j] = a; h[j + 3] = h[j + 2]; h[j + 2] = o; a = o;
+          }
+          for (let k = 0; k < 4; k++) {                        // path B (Q)
+            const j = 16 + k * 4, o = cb[k] * (b + h[j + 3]) - h[j + 1];
+            h[j + 1] = h[j]; h[j] = b; h[j + 3] = h[j + 2]; h[j + 2] = o; b = o;
+          }
+          const q = this.qd[ch]; this.qd[ch] = b;              // one-sample delay → quadrature
+          const down = mode === 1 || (mode === 2 && ch === 1);
+          y = down ? a * co - q * si : a * co + q * si;
+        }
+        this.buf[ch][this.w] = y;
+        O[ch][i] = inp * (1 - mix) + y * mix;
+      }
+      if (++this.w === N) this.w = 0;
+    }
+    if (!aRate) { ph = (ph + dph * n) % TAU; if (ph < 0) ph += TAU; }
+    this.ph = ph;
+    return true;
+  }
+}
+registerProcessor('shifter', ShiftProc);
+
+/* ---------------------------------------------------------------------
+   STUTTER — beat repeat / reverse / roll / pitch dive / tape stop
+   The input is always recorded into an 8 s ring. A rising edge on the
+   a-rate 'gate' param (scheduled by the main thread with setValueAtTime,
+   so it is sample-accurate and cancellable — and works in bounces)
+   captures a slice starting NOW: the first pass is the live input, the
+   following passes repeat it. 3 ms crossfades on gate edges, ~1.5 ms
+   windows on slice boundaries → no clicks.
+   Modes: 0 repeat · 1 reverse · 2 roll (slice halves every 2 repeats)
+          3 pitch (each repeat transposed by Pitch) · 4 tape stop
+   --------------------------------------------------------------------- */
+class StutterProc extends AudioWorkletProcessor {
+  static get parameterDescriptors() {
+    return [
+      { name: 'gate',  defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'a-rate' },
+      { name: 'len',   defaultValue: .125, minValue: .005, maxValue: 4, automationRate: 'k-rate' },
+      { name: 'mode',  defaultValue: 0, minValue: 0, maxValue: 4, automationRate: 'k-rate' },
+      { name: 'pitch', defaultValue: 0, minValue: -24, maxValue: 24, automationRate: 'k-rate' },
+      { name: 'decay', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'mix',   defaultValue: 1, minValue: 0, maxValue: 1, automationRate: 'k-rate' }
+    ];
+  }
+  constructor(o) {
+    super();
+    this.N = Math.ceil(sampleRate * 8);
+    this.buf = [new Float32Array(this.N), new Float32Array(this.N)];
+    this.w = 0; this.on = false; this.wet = 0;
+    this.start = 0; this.base = 1; this.seg = 1; this.pos = 0; this.k = 0; this.rate = 1; this.amp = 1; this.tv = 1;
+    this.fadeS = Math.round(sampleRate * .0015);
+    this.xf = 1 - Math.exp(-1 / (sampleRate * .003));
+    this.meters = !!(o && o.processorOptions && o.processorOptions.meters);
+    this.blk = 0; this.mb = new Float32Array(6);
+  }
+  read(ch, idx) {                                           // linear interpolation in the ring
+    const N = this.N, b = this.buf[ch];
+    let i0 = Math.floor(idx); const f = idx - i0;
+    i0 = ((i0 % N) + N) % N;
+    return b[i0] + (b[(i0 + 1) % N] - b[i0]) * f;
+  }
+  process(inputs, outputs, p) {
+    const I = inputs[0], O = outputs[0];
+    if (!O || !O.length) return true;
+    const n = O[0].length, N = this.N, nc = O.length;
+    const has = I && I.length;
+    const G = p.gate, gA = G.length > 1;
+    /* FAST PATH: idle (not engaged, no fade in progress, gate low) → record + pass through */
+    if (!this.on && this.wet < 1e-4 && !gA && G[0] < .5) {
+      for (let ch = 0; ch < 2; ch++) {
+        const src = has ? I[Math.min(ch, I.length - 1)] : null, b = this.buf[ch];
+        let w = this.w;
+        for (let i = 0; i < n; i++) { b[w] = src ? src[i] : 0; if (++w === N) w = 0; }
+        if (ch < nc) { if (src) O[ch].set(src); else O[ch].fill(0); }
+      }
+      this.w = (this.w + n) % N; this.wet = 0;
+      this.post();
+      return true;
+    }
+    const sr = sampleRate, mode = Math.round(p.mode[0]), pitch = p.pitch[0], decay = p.decay[0], mix = p.mix[0];
+    const lenS = Math.max(64, Math.round(p.len[0] * sr)), fadeS = this.fadeS;
+    for (let i = 0; i < n; i++) {
+      const g = gA ? G[i] : G[0];
+      const w = this.w;
+      const x0 = has ? I[0][i] : 0, x1 = has ? I[Math.min(1, I.length - 1)][i] : 0;
+      this.buf[0][w] = x0; this.buf[1][w] = x1;
+      if (g >= .5 && !this.on) {                           // engage: slice starts now
+        this.on = true; this.start = w; this.base = this.seg = lenS; this.pos = 0;
+        this.k = 0; this.rate = 1; this.amp = 1; this.tv = 1;
+      } else if (g < .5 && this.on) this.on = false;
+      this.wet += ((this.on ? 1 : 0) - this.wet) * this.xf;
+      let y0 = x0, y1 = x1;
+      if (this.wet > 1e-4) {
+        let idx, win = 1;
+        if (mode === 4) {                                  // tape stop: playback speed → 0 over one slice
+          idx = this.start + this.pos;
+          this.pos += this.tv;
+          this.tv = Math.max(0, this.tv - 1 / this.base);
+          win = Math.min(1, this.tv * 8);
+        } else {
+          const pos = this.pos, seg = this.seg;
+          idx = this.start + ((mode === 1 && this.k > 0) ? (seg - 1 - pos) : pos);
+          if (this.k > 0) win = Math.min(1, pos / fadeS, (seg - pos) / fadeS);
+          else win = Math.min(1, (seg - pos) / fadeS);
+          this.pos += this.rate;
+          if (this.pos >= this.seg) {                     // next repeat
+            this.pos -= this.seg; this.k++;
+            if (mode === 2) this.seg = Math.max(Math.round(sr * .012), Math.round(this.base / Math.pow(2, Math.floor(this.k / 2))));
+            this.rate = Math.min(4, Math.max(.125, Math.pow(2, (mode === 3 ? this.k * pitch : pitch) / 12)));
+            if (this.pos >= this.seg) this.pos = 0;
+            this.amp = Math.pow(1 - decay, this.k);
+          }
+        }
+        const a = Math.max(0, win) * this.amp;
+        const w0 = this.read(0, idx) * a, w1 = this.read(1, idx) * a;
+        const k = this.wet * mix;
+        y0 = x0 * (1 - k) + w0 * k; y1 = x1 * (1 - k) + w1 * k;
+      }
+      O[0][i] = y0; if (nc > 1) O[1][i] = y1;
+      this.w = (w + 1) % N;
+    }
+    this.post();
+    return true;
+  }
+  post() {
+    if (!this.meters || ++this.blk < 10) return;
+    this.blk = 0;
+    const m = this.mb;
+    m[0] = this.on ? 1 : 0; m[1] = this.k; m[2] = this.seg > 0 ? this.pos / this.seg : 0;
+    m[3] = this.seg / Math.max(1, this.base); m[4] = this.tv; m[5] = this.amp;
+    this.port.postMessage(m);
+  }
+}
+registerProcessor('stutter', StutterProc);
+`;
 
 
 /* AudioParam helpers (setAP = click-free move, cah = cancel-and-hold) live on the
@@ -2160,7 +2583,24 @@ history.onChange(() => {
   return m;
 }
 /** Cache the module's rendered size (used for culling, fit-view and marquee). */
-function measure(m) { m.w = m.el.offsetWidth; m.hh = m.el.offsetHeight; }
+function measure(m) { m.w = m.el.offsetWidth; m.hh = m.el.offsetHeight; fitCanvases(m); }
+/**
+ * m.viz() can only guess a canvas's width before the module is laid out (the jack
+ * columns take part of the row). Once it is in the DOM, size each backing store to
+ * the real CSS width so drawings are neither squashed nor blurry.
+ */
+function fitCanvases(m) {
+  const r = devicePixelRatio;
+  let changed = false;
+  for (const ctx of (m.vizList || [])) {
+    const c = ctx.canvas, cw = c.clientWidth;
+    if (!cw || Math.abs(cw - c.W) < .5) continue;
+    c.W = cw; c.width = Math.round(cw * r); c.height = Math.round(c.H * r);
+    ctx.setTransform(r, 0, 0, r, 0, 0);
+    changed = true;
+  }
+  if (changed && m.onDpr) { try { m.onDpr(r); } catch (e) {} }
+}
 /**
  * Fully remove a module: cables, taps, audio nodes, DOM.
  * Cables are disconnected FIRST (each recording itself), then the module is
@@ -3946,6 +4386,768 @@ DEFS.crush = {
 };
 
 
+/* ===========================================================================
+ * 11.4b · FX LAB — SMASH · GROWL · SHIFT · STUTTER · PUMP
+ * ---------------------------------------------------------------------------
+ * Modern bass-music effects. DSP for the first four lives in AudioWorklets
+ * (WORKLET_SRC); PUMP is pure native automation. Shared helpers below.
+ * Engine rules (README § 15.5) apply: block-constant fast paths, silence
+ * early-outs, cancellable look-ahead (STUTTER / PUMP implement cancelAfter),
+ * per-instance teardown in m.free, cheap allocation-free draw().
+ * ------------------------------------------------------------------------- */
+
+/** Worklet node for an FX module, or null without AudioWorklet (module becomes a bypass). */
+function fxNode(m, name) {
+  if (!m.ctx.hasWorklet) return null;
+  try {
+    return new AudioWorkletNode(m.ctx.ac, name, {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+      processorOptions: { meters: !HEADLESS }            // offline copies don't post meters
+    });
+  } catch (e) { console.warn('[fx] ' + name + ' unavailable', e); return null; }
+}
+/** Knob bound to a worklet AudioParam — audio-rate modulatable when the worklet exists. */
+function fxKnob(node, setAP, d) {
+  const ap = node ? node.parameters.get(d.p || d.id) : null;
+  return { k: 'knob', curve: 'lin', ...d,
+           mod: ap ? { targets: [ap], scale: d.scale } : undefined,
+           set: v => { if (ap) setAP(ap, v, .01); } };
+}
+/** Jump a (discrete) AudioParam to v immediately. */
+function fxSetNow(m, ap, v) {
+  if (!ap) return;
+  try { ap.cancelScheduledValues(0); ap.setValueAtTime(v, m.ctx.now()); } catch (e) { ap.value = v; }
+}
+
+/** Small drawing kit shared by the FX visuals (neon look without costly shadowBlur on long paths). */
+const FXV = {
+  rgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+  },
+  /** two-pass stroke of the current path: soft wide halo + crisp core */
+  glow(ctx, col, w = 1.6, halo = .22) {
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = halo; ctx.lineWidth = w * 4.5; ctx.stroke();
+    ctx.globalAlpha = 1;    ctx.lineWidth = w;       ctx.stroke();
+  },
+  grid(ctx, W, H, nx = 8, ny = 4) {
+    ctx.strokeStyle = 'rgba(255,255,255,.045)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < nx; i++) { const x = Math.round(i / nx * W) + .5; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let i = 1; i < ny; i++) { const y = Math.round(i / ny * H) + .5; ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+  },
+  label(ctx, txt, x, y, col = 'rgba(255,255,255,.45)', size = 7.5, align = 'left') {
+    ctx.font = `${size}px ui-monospace,Menlo,monospace`; ctx.fillStyle = col; ctx.textAlign = align;
+    ctx.fillText(txt, x, y); ctx.textAlign = 'left';
+  },
+  /** shown when the browser has no AudioWorklet */
+  noWorklet(ctx, W, H) {
+    ctx.clearRect(0, 0, W, H);
+    FXV.label(ctx, 'needs AudioWorklet — bypassed', W / 2, H / 2 + 3, 'rgba(255,255,255,.5)', 8.5, 'center');
+  },
+  roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+};
+
+
+/* ---------------------------------------------------------------------------
+ * SMASH — OTT-style 3-band upward/downward compressor
+ * ------------------------------------------------------------------------- */
+DEFS.smash = {
+  name: 'SMASH', glyph: '▥', color: '#ff3355', w: 262,
+  desc: '3-band upward + downward compressor (OTT-style): loud, dense, in-your-face',
+  build(m) {
+    const { ac: AC, setAP } = m.ctx;
+    const inn = m.node(AC.createGain()), out = m.node(AC.createGain());
+    const node = fxNode(m, 'smash');
+    if (node) { m.node(node); inn.connect(node).connect(out); } else inn.connect(out);
+    m.addIn({ id: 'in', label: 'In', kind: 'sig', node: inn });
+    m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
+
+    const ctx = m.viz(92);
+    /* meters from the worklet: [lvl L/M/H dB, gain L/M/H dB, out peak] */
+    const raw = new Float32Array([-90, -90, -90, 0, 0, 0, 0]), shown = new Float32Array([-90, -90, -90, 0, 0, 0, 0]);
+    if (node) node.port.onmessage = e => raw.set(e.data);
+    m.free = () => { if (node) node.port.onmessage = null; };
+
+    const dB = v => (v > 0 ? '+' : '') + v.toFixed(1) + 'dB';
+    m.knobs([
+      fxKnob(node, setAP, { id: 'depth', label: 'Depth', min: 0, max: 1, def: .6, unit: '%', scale: .5 }),
+      fxKnob(node, setAP, { id: 'time', label: 'Time', min: 0, max: 1, def: .5, scale: .5,
+                            fmt: v => Math.pow(10, (v - .5) * 2).toFixed(v < .5 ? 2 : 1) + '×' }),
+      fxKnob(node, setAP, { id: 'up', label: 'Up', min: 0, max: 1, def: .5, unit: '%', scale: .5 }),
+      fxKnob(node, setAP, { id: 'down', label: 'Down', min: 0, max: 1, def: .7, unit: '%', scale: .5 })
+    ]);
+    m.knobs([
+      fxKnob(node, setAP, { id: 'lo', label: 'Low', min: -24, max: 24, def: 0, fmt: dB, scale: 12 }),
+      fxKnob(node, setAP, { id: 'mid', label: 'Mid', min: -24, max: 24, def: 0, fmt: dB, scale: 12 }),
+      fxKnob(node, setAP, { id: 'hi', label: 'High', min: -24, max: 24, def: 0, fmt: dB, scale: 12 }),
+      fxKnob(node, setAP, { id: 'out', label: 'Out', min: -24, max: 12, def: 0, fmt: dB, scale: 12 })
+    ]);
+
+    const T_DOWN = [-35, -30, -33], T_UP = [-41, -42, -41], NAMES = ['LOW', 'MID', 'HIGH'];
+    const UP = '#38f9ff';
+    m.draw = () => {
+      const W = ctx.canvas.W, H = ctx.canvas.H;
+      if (!node) return FXV.noWorklet(ctx, W, H);
+      for (let i = 0; i < 7; i++) shown[i] += (raw[i] - shown[i]) * (i === 6 ? .5 : .35);
+      ctx.clearRect(0, 0, W, H);
+      const top = 12, bot = H - 12, y = db => bot - clamp((db + 60) / 60, 0, 1) * (bot - top);
+      const cw = (W - 26) / 3;
+      for (let b = 0; b < 3; b++) {
+        const x = b * cw + 3, w = cw - 6;
+        ctx.fillStyle = 'rgba(255,255,255,.035)';
+        FXV.roundRect(ctx, x, top, w, bot - top, 4); ctx.fill();
+        /* thresholds: downward (red) and upward (cyan) */
+        ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+        ctx.strokeStyle = FXV.rgba(m.def.color, .55);
+        ctx.beginPath(); ctx.moveTo(x, y(T_DOWN[b]) + .5); ctx.lineTo(x + w, y(T_DOWN[b]) + .5); ctx.stroke();
+        ctx.strokeStyle = FXV.rgba(UP, .5);
+        ctx.beginPath(); ctx.moveTo(x, y(T_UP[b]) + .5); ctx.lineTo(x + w, y(T_UP[b]) + .5); ctx.stroke();
+        ctx.setLineDash([]);
+        /* input level */
+        const lv = shown[b], gr = shown[3 + b], yl = y(lv);
+        const grd = ctx.createLinearGradient(0, bot, 0, top);
+        grd.addColorStop(0, 'rgba(255,255,255,.06)'); grd.addColorStop(1, 'rgba(255,255,255,.28)');
+        ctx.fillStyle = grd; ctx.fillRect(x + w * .18, yl, w * .64, bot - yl);
+        /* gain: squash (red, downwards) or lift (cyan, upwards) */
+        const ya = y(lv + gr), col = gr < 0 ? m.def.color : UP;
+        if (Math.abs(gr) > .3) {
+          ctx.fillStyle = FXV.rgba(col, .55);
+          ctx.fillRect(x + w * .18, Math.min(yl, ya), w * .64, Math.abs(ya - yl));
+          ctx.fillStyle = col;                                         // arrow head
+          ctx.beginPath();
+          const cx = x + w / 2, d = gr < 0 ? 1 : -1;
+          ctx.moveTo(cx - 5, ya - d * 5); ctx.lineTo(cx + 5, ya - d * 5); ctx.lineTo(cx, ya); ctx.closePath(); ctx.fill();
+        }
+        ctx.fillStyle = '#fff'; ctx.fillRect(x + w * .12, Math.min(yl, ya) - 1, w * .76, 2);
+        FXV.label(ctx, (gr > 0 ? '+' : '') + gr.toFixed(1), x + w / 2, 9, Math.abs(gr) > .3 ? col : 'rgba(255,255,255,.35)', 8, 'center');
+        FXV.label(ctx, NAMES[b], x + w / 2, H - 3, 'rgba(255,255,255,.45)', 7, 'center');
+      }
+      /* output meter */
+      const ox = W - 17, pk = clamp(shown[6], 0, 1.2);
+      ctx.fillStyle = 'rgba(255,255,255,.05)'; FXV.roundRect(ctx, ox, top, 12, bot - top, 3); ctx.fill();
+      const oy = bot - Math.sqrt(pk / 1.2) * (bot - top);
+      const og = ctx.createLinearGradient(0, bot, 0, top);
+      og.addColorStop(0, FXV.rgba(m.def.color, .35)); og.addColorStop(1, m.def.color);
+      ctx.fillStyle = og; ctx.fillRect(ox + 2, oy, 8, bot - oy);
+      FXV.label(ctx, 'OUT', ox + 6, H - 3, 'rgba(255,255,255,.45)', 6.5, 'center');
+    };
+  }
+};
+
+
+/* ---------------------------------------------------------------------------
+ * GROWL — vowel / formant filter with drive and grit (the "yoi" machine)
+ * ------------------------------------------------------------------------- */
+const GROWL_V = {                      // must match GrowlProc: U O A E I
+  names: ['U', 'O', 'A', 'E', 'I'],
+  F: [[350, 600, 2400], [400, 750, 2400], [600, 1040, 2250], [400, 1620, 2400], [250, 1750, 2600]],
+  B: [[40, 80, 100], [40, 80, 100], [60, 70, 110], [40, 80, 100], [60, 90, 100]],
+  G: [[0, -14, -26], [0, -8, -18], [0, -4, -8], [-2, 0, -6], [-6, 0, -3]],
+  /* mouth shape per vowel: [openness, width] */
+  mouth: [[.28, .2], [.7, .38], [1, .72], [.42, 1], [.16, .95]]
+};
+DEFS.growl = {
+  name: 'GROWL', glyph: '◉', color: '#a6ff00', w: 262,
+  desc: 'talking formant filter: morph U·O·A·E·I with drive and grit — patch an LFO into Morph',
+  build(m) {
+    const { ac: AC, setAP } = m.ctx;
+    const inn = m.node(AC.createGain()), out = m.node(AC.createGain());
+    const node = fxNode(m, 'growl');
+    if (node) { m.node(node); inn.connect(node).connect(out); } else inn.connect(out);
+    m.addIn({ id: 'in', label: 'In', kind: 'sig', node: inn });
+    m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
+    const ana = AC.createAnalyser(); ana.fftSize = 256; out.connect(ana);
+    const ab = new Float32Array(256);
+
+    const ctx = m.viz(96);
+    const st = (s => s >= 0 ? '+' + s.toFixed(0) + 'st' : s.toFixed(0) + 'st');
+    m.knobs([
+      fxKnob(node, setAP, { id: 'morph', label: 'Morph', min: 0, max: 1, def: .5, scale: .5,
+                            fmt: v => GROWL_V.names[Math.round(clamp(v, 0, 1) * 4)] + ' ' + (v * 100).toFixed(0) }),
+      fxKnob(node, setAP, { id: 'shift', label: 'Formant', min: -24, max: 24, def: 0, scale: 12, fmt: st }),
+      fxKnob(node, setAP, { id: 'reso', label: 'Reso', min: .3, max: 6, def: 1.5, curve: 'pow2', scale: 2 }),
+      fxKnob(node, setAP, { id: 'drive', label: 'Drive', min: 1, max: 40, def: 4, curve: 'exp', scale: 10 })
+    ]);
+    const r2 = m.knobs([
+      fxKnob(node, setAP, { id: 'grit', label: 'Grit', min: 0, max: 1, def: .3, unit: '%', scale: .5 }),
+      fxKnob(node, setAP, { id: 'mix', label: 'Mix', min: 0, max: 1, def: 1, unit: '%', scale: .5, rnd: [.6, 1] })
+    ]);
+    /* vowel quick-set buttons (share the second knob row) */
+    const vr = h('div', 'fxgrid'); vr.style.gridTemplateColumns = 'repeat(5,1fr)';
+    GROWL_V.names.forEach((nm, i) => {
+      const b = h('button', 'tg', nm);
+      b.title = 'morph to "' + nm + '"';
+      b.addEventListener('pointerdown', e => e.stopPropagation());
+      b.onclick = () => { const p = m.params.morph, before = p.value; p.setValue(i / 4); recParam(p, before, { merge: false }); };
+      vr.appendChild(b);
+    });
+    r2.appendChild(vr);
+    const vbtn = [...vr.children];
+
+    /* response of one normalised bandpass at frequency f */
+    const bp = (f, f0, Q) => 1 / Math.sqrt(1 + Q * Q * Math.pow(f / f0 - f0 / f, 2));
+    const NF = 64, freqs = Array.from({ length: NF }, (_, i) => 60 * Math.pow(80, i / (NF - 1)));   // 60 Hz .. 4.8 kHz
+    const resp = new Float32Array(NF), fm = new Float64Array(9);
+    let jaw = 0;
+    m.draw = () => {
+      const W = ctx.canvas.W, H = ctx.canvas.H;
+      if (!node) return FXV.noWorklet(ctx, W, H);
+      ctx.clearRect(0, 0, W, H);
+      const mo = clamp(m.params.morph.effective(), 0, 1), q = Math.min(3.9999, mo * 4), i0 = q | 0, fr = q - i0;
+      const mul = Math.pow(2, m.params.shift.effective() / 12), reso = m.params.reso.effective();
+      /* live level opens the jaw a little: the lips "sing" with the audio */
+      ana.getFloatTimeDomainData(ab);
+      let pk = 0; for (let i = 0; i < ab.length; i += 4) pk = Math.max(pk, Math.abs(ab[i]));
+      jaw += (Math.min(1, pk * 1.6) - jaw) * .3;
+
+      /* ---- formant response (right) ---- */
+      const x0 = Math.round(W * .42), cw = W - x0 - 4, top = 6, bot = H - 20;
+      for (let k = 0; k < 3; k++) {                                   // 3 formants, once per frame
+        const f0 = Math.exp(Math.log(GROWL_V.F[i0][k]) + (Math.log(GROWL_V.F[i0 + 1][k]) - Math.log(GROWL_V.F[i0][k])) * fr) * mul;
+        fm[k * 3] = f0;
+        fm[k * 3 + 1] = Math.max(.5, f0 / lerp(GROWL_V.B[i0][k], GROWL_V.B[i0 + 1][k], fr) * .35 * reso);
+        fm[k * 3 + 2] = Math.pow(10, lerp(GROWL_V.G[i0][k], GROWL_V.G[i0 + 1][k], fr) / 20);
+      }
+      let mx = 1e-6;
+      for (let i = 0; i < NF; i++) {
+        const s = bp(freqs[i], fm[0], fm[1]) * fm[2] + bp(freqs[i], fm[3], fm[4]) * fm[5] + bp(freqs[i], fm[6], fm[7]) * fm[8];
+        resp[i] = s; if (s > mx) mx = s;
+      }
+      ctx.beginPath();
+      for (let i = 0; i < NF; i++) {
+        const x = x0 + i / (NF - 1) * cw, y = bot - Math.pow(resp[i] / mx, .6) * (bot - top);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.lineTo(x0 + cw, bot); ctx.lineTo(x0, bot); ctx.closePath();
+      const g = ctx.createLinearGradient(0, top, 0, bot);
+      g.addColorStop(0, FXV.rgba(m.def.color, .38)); g.addColorStop(1, FXV.rgba(m.def.color, .02));
+      ctx.fillStyle = g; ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < NF; i++) {
+        const x = x0 + i / (NF - 1) * cw, y = bot - Math.pow(resp[i] / mx, .6) * (bot - top);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      FXV.glow(ctx, m.def.color, 1.4);
+      const near = Math.round(mo * 4);
+      vbtn.forEach((b, i) => b.classList.toggle('on', i === near));
+      /* vowel strip */
+      GROWL_V.names.forEach((nm, i) => {
+        const d = Math.abs(mo * 4 - i), on = Math.max(0, 1 - d);
+        const x = x0 + 8 + i * (cw - 16) / 4;
+        FXV.label(ctx, nm, x, H - 5, on > .05 ? FXV.rgba(m.def.color, .35 + on * .65) : 'rgba(255,255,255,.22)',
+                  8 + on * 5, 'center');
+      });
+
+      /* ---- neon lips (left) ---- */
+      const A = GROWL_V.mouth[i0], B = GROWL_V.mouth[i0 + 1];
+      const open = lerp(A[0], B[0], fr) * (.8 + jaw * .45), wide = lerp(A[1], B[1], fr);
+      const cx = x0 / 2, cy = H / 2 - 2, sc = Math.min(1, x0 / 96), mw = (30 + wide * 46) * sc, mh = (5 + open * 30) * Math.min(1, sc * 1.1);
+      const lipT = 5 + (1 - wide) * 2, round = 1 - wide;                // round vowels pucker
+      /* outer lips */
+      ctx.beginPath();
+      ctx.moveTo(cx - mw / 2, cy);
+      ctx.bezierCurveTo(cx - mw * .36, cy - mh * .55 - lipT - round * 6, cx - mw * .14, cy - mh * .62 - lipT - 3, cx, cy - mh * .48 - lipT);
+      ctx.bezierCurveTo(cx + mw * .14, cy - mh * .62 - lipT - 3, cx + mw * .36, cy - mh * .55 - lipT - round * 6, cx + mw / 2, cy);
+      ctx.bezierCurveTo(cx + mw * .34, cy + mh * .72 + lipT + round * 6, cx - mw * .34, cy + mh * .72 + lipT + round * 6, cx - mw / 2, cy);
+      ctx.closePath();
+      const lg = ctx.createLinearGradient(0, cy - mh, 0, cy + mh);
+      lg.addColorStop(0, FXV.rgba(m.def.color, .45)); lg.addColorStop(1, FXV.rgba(m.def.color, .18));
+      ctx.fillStyle = lg; ctx.fill();
+      FXV.glow(ctx, m.def.color, 1.5, .28);
+      /* mouth opening */
+      const iw = mw * (.78 - round * .2), ih = mh * .82;
+      ctx.beginPath();
+      ctx.moveTo(cx - iw / 2, cy);
+      ctx.bezierCurveTo(cx - iw * .3, cy - ih * .62, cx + iw * .3, cy - ih * .62, cx + iw / 2, cy);
+      ctx.bezierCurveTo(cx + iw * .3, cy + ih * .75, cx - iw * .3, cy + ih * .75, cx - iw / 2, cy);
+      ctx.closePath();
+      ctx.fillStyle = '#04060a'; ctx.fill();
+      ctx.save(); ctx.clip();
+      if (wide > .55) {                                                 // teeth show on E / I
+        ctx.fillStyle = 'rgba(235,245,255,.85)';
+        ctx.fillRect(cx - iw * .42, cy - ih * .62, iw * .84, ih * .32 + 1);
+        ctx.strokeStyle = 'rgba(4,6,10,.6)'; ctx.lineWidth = 1; ctx.beginPath();
+        for (let t = -3; t <= 3; t++) { const tx = cx + t * iw * .11; ctx.moveTo(tx, cy - ih * .62); ctx.lineTo(tx, cy - ih * .3); }
+        ctx.stroke();
+      }
+      if (open > .5) {                                                  // tongue on O / A
+        ctx.fillStyle = FXV.rgba('#ff5c8a', .55);
+        ctx.beginPath(); ctx.ellipse(cx, cy + ih * .55, iw * .3, ih * .28, 0, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    };
+  }
+};
+
+
+/* ---------------------------------------------------------------------------
+ * SHIFT — frequency shifter with feedback spirals (+ ring mod)
+ * ------------------------------------------------------------------------- */
+DEFS.shift = {
+  name: 'SHIFT', glyph: '⟲', color: '#b44dff', w: 250,
+  desc: 'Bode frequency shifter + feedback delay: barber-pole spirals, lasers, ring mod',
+  build(m) {
+    const { ac: AC, setAP, beatSec } = m.ctx;
+    const inn = m.node(AC.createGain()), out = m.node(AC.createGain());
+    const node = fxNode(m, 'shifter');
+    if (node) { m.node(node); inn.connect(node).connect(out); } else inn.connect(out);
+    m.addIn({ id: 'in', label: 'In', kind: 'sig', node: inn });
+    m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
+    const ap = n => (node ? node.parameters.get(n) : null);
+
+    const ctx = m.viz(84);
+    const hzOf = v => 2500 * v * v * v;
+    const fmtHz = v => { const hz = hzOf(v); const a = Math.abs(hz);
+      return (hz >= 0 ? '+' : '−') + (a >= 100 ? a.toFixed(0) : a >= 10 ? a.toFixed(1) : a.toFixed(2)) + 'Hz'; };
+
+    let sync = '1/16', freeMs = 90;
+    const setDelay = () => {
+      const ms = sync === 'free' ? freeMs : clamp(DIVS[sync] * beatSec() * 1000, 1, 1000);
+      if (ap('delay')) setAP(ap('delay'), ms, .03);
+    };
+    m.setT = setDelay;
+
+    const row = h('div', 'row');
+    row.appendChild(m.param({ k: 'select', id: 'mode', label: 'Mode', opts: ['up', 'down', 'wide', 'ring'], def: 'up',
+      set: v => fxSetNow(m, ap('mode'), ['up', 'down', 'wide', 'ring'].indexOf(v)) }));
+    row.appendChild(m.param({ k: 'select', id: 'sync', label: 'Sync', opts: ['free', '1/4', '1/8', '1/8T', '1/16', '1/16T', '1/32'], def: '1/16',
+      set: v => { sync = v; setDelay(); } }));
+    m.ctrls.appendChild(row);
+    m.knobs([
+      fxKnob(node, setAP, { id: 'shift', label: 'Shift', min: -1, max: 1, def: .3, scale: .5, fmt: fmtHz }),
+      fxKnob(node, setAP, { id: 'fb', label: 'Feedback', min: 0, max: .97, def: .5, unit: '%', scale: .4, rnd: [0, .8] }),
+      { k: 'knob', id: 'time', label: 'Time', min: 1, max: 1000, def: 90, curve: 'exp', unit: 'ms',
+        fmt: v => v.toFixed(v < 10 ? 1 : 0) + 'ms', mod: { scale: 200 },
+        set: v => { freeMs = v; if (sync === 'free') setDelay(); } },
+      fxKnob(node, setAP, { id: 'mix', label: 'Mix', min: 0, max: 1, def: .7, unit: '%', scale: .5 })
+    ]);
+
+    let th = 0, stripe = 0, lastT = 0;
+    const trail = 16;
+    m.draw = t => {
+      const W = ctx.canvas.W, H = ctx.canvas.H;
+      if (!node) return FXV.noWorklet(ctx, W, H);
+      const dt = lastT ? Math.min(.1, (t - lastT) / 1000) : 0; lastT = t;
+      const sv = clamp(m.params.shift.effective(), -1, 1), hz = hzOf(sv), sgn = hz < 0 ? -1 : 1;
+      const fb = m.params.fb.effective(), mode = m.params.mode.value, col = m.def.color;
+      /* visual rotation speed: log-scaled so 0.5 Hz and 2 kHz both read well */
+      const rps = mode === 'ring' ? 0 : sgn * Math.min(2.5, Math.log2(1 + Math.abs(hz)) * .22);
+      th += rps * dt * Math.PI * 2;
+      stripe += (mode === 'ring' ? 0 : rps) * dt * 60;
+      ctx.clearRect(0, 0, W, H);
+
+      /* ---- barber pole (right) ---- */
+      const bx = 90, bw = W - bx - 4, by = 6, bh = H - 20;
+      ctx.save();
+      FXV.roundRect(ctx, bx, by, bw, bh, 6); ctx.clip();
+      ctx.fillStyle = 'rgba(255,255,255,.03)'; ctx.fillRect(bx, by, bw, bh);
+      const sp = 18, off = ((stripe % sp) + sp) % sp;
+      for (let x = bx - bh - sp + off; x < bx + bw + sp; x += sp) {
+        ctx.beginPath(); ctx.moveTo(x, by + bh); ctx.lineTo(x + bh, by); ctx.lineTo(x + bh + sp * .45, by); ctx.lineTo(x + sp * .45, by + bh); ctx.closePath();
+        ctx.fillStyle = FXV.rgba(col, .10 + fb * .22); ctx.fill();
+      }
+      if (mode === 'ring') {                                        // ring mod: pulsing bands instead
+        const pulse = .5 + .5 * Math.sin(t / 1000 * Math.PI * 2 * Math.min(8, Math.abs(hz) / 50 + .5));
+        ctx.fillStyle = FXV.rgba(col, .08 + pulse * .18); ctx.fillRect(bx, by, bw, bh);
+      }
+      ctx.restore();
+      FXV.label(ctx, fmtHz(sv), bx + bw / 2, by + bh / 2 + 5, '#fff', 13, 'center');
+      FXV.label(ctx, mode.toUpperCase() + ' · FB ' + Math.round(fb * 100) + ' · ' + (sync === 'free' ? Math.round(freeMs) + 'ms' : sync),
+                W / 2, H - 4, 'rgba(255,255,255,.45)', 7, 'center');
+
+      /* ---- phasor with feedback spiral (left) ---- */
+      const cx = 44, cy = H / 2, R = 34;
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1; ctx.stroke();
+      const rings = 1 + Math.round(fb * 7);
+      for (let k = 0; k < rings; k++) {
+        const rr = R * (1 - k * .11), a0 = th - k * .55 * sgn, alpha = Math.pow(Math.max(fb, .35), k);
+        for (let j = 0; j < trail; j++) {                              // comet tail
+          const a = a0 - j * .085 * sgn * (rps === 0 ? 0 : 1);
+          ctx.fillStyle = FXV.rgba(col, alpha * (1 - j / trail) * .9);
+          ctx.beginPath(); ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, (k ? 1.8 : 2.8) * (1 - j / trail * .6), 0, Math.PI * 2); ctx.fill();
+        }
+      }
+      ctx.beginPath(); ctx.arc(cx + Math.cos(th) * R, cy + Math.sin(th) * R, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fillStyle = FXV.rgba(col, .8); ctx.fill();
+    };
+  }
+};
+
+
+/* ---------------------------------------------------------------------------
+ * STUTTER — tempo-synced beat repeat · reverse · roll · pitch dive · tape stop
+ * ------------------------------------------------------------------------- */
+DEFS.stutter = {
+  name: 'STUTTER', glyph: '⫼', color: '#00ffb3', w: 300,
+  desc: 'beat repeat / reverse / roll / pitch dive / tape stop — hold the pad, gate it, or let it glitch on its own',
+  build(m) {
+    const { ac: AC, now, setAP, beatSec, transport: T } = m.ctx;
+    const inn = m.node(AC.createGain()), out = m.node(AC.createGain());
+    const node = fxNode(m, 'stutter');
+    if (node) { m.node(node); inn.connect(node).connect(out); } else inn.connect(out);
+    const ap = n => (node ? node.parameters.get(n) : null), gateP = ap('gate');
+    const ana = AC.createAnalyser(); ana.fftSize = 512; out.connect(ana);
+    const ab = new Float32Array(512), hist = new Float32Array(96); let hp = 0;
+
+    /* worklet state → visuals: [on, repeat k, pos 0..1, seg/base, tape speed, amp] */
+    const stt = new Float32Array(6);
+    if (node) node.port.onmessage = e => stt.set(e.data);
+    m.free = () => { if (node) node.port.onmessage = null; };
+
+    /* ---- gate scheduling (sample-accurate AudioParam automation) ---- */
+    const SR = AC.sampleRate;
+    const gateOn  = t => { if (!gateP) return; gateP.setValueAtTime(0, t); gateP.setValueAtTime(1, t + 2 / SR); };  // re-arm = fresh slice
+    const gateOff = t => { if (gateP) gateP.setValueAtTime(0, t); };
+    m.addIn({ id: 'in', label: 'In', kind: 'sig', node: inn });
+    m.addIn({ id: 'gate', label: 'Gate', kind: 'trig',
+              onTrig: (t, v, dur) => { gateOn(t); if (dur != null) gateOff(t + dur); },
+              onRel: t => gateOff(t) });
+    m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
+
+    const ctx = m.viz(88);
+    const MODES = ['repeat', 'reverse', 'roll', 'pitch', 'tape stop'];
+    const setLen = () => { const p = ap('len'); if (p) setAP(p, clamp(DIVS[m.params.div.value] * beatSec(), .005, 4), .005); };
+    m.setT = setLen;
+    const row = h('div', 'row');
+    row.appendChild(m.param({ k: 'select', id: 'div', label: 'Slice', opts: ['1/2', '1/4', '1/8', '1/8T', '1/16', '1/16T', '1/32'], def: '1/16',
+      set: () => setLen() }));
+    row.appendChild(m.param({ k: 'select', id: 'mode', label: 'Mode', opts: MODES, def: 'repeat',
+      set: v => fxSetNow(m, ap('mode'), MODES.indexOf(v)) }));
+    m.ctrls.appendChild(row);
+    const SPANS = [.25, .5, 1, 2, 4];
+    m.knobs([
+      fxKnob(node, setAP, { id: 'pitch', label: 'Pitch', min: -12, max: 12, def: 0, step: 1, scale: 12,
+                            fmt: v => (v > 0 ? '+' : '') + v.toFixed(0) + 'st' }),
+      fxKnob(node, setAP, { id: 'decay', label: 'Decay', min: 0, max: 1, def: 0, unit: '%', scale: .5, rnd: [0, .5] }),
+      { k: 'knob', id: 'chance', label: 'Chance', min: 0, max: 1, def: 0, unit: '%', mod: { scale: .5 }, set: () => {} },
+      { k: 'knob', id: 'span', label: 'Span', min: 0, max: 4, def: 1, step: 1, nornd: 1, mod: { scale: 2 },
+        fmt: v => ['1/16', '1/8', '1/4', '1/2', '1 bar'][Math.round(v)], set: () => {} },
+      fxKnob(node, setAP, { id: 'mix', label: 'Mix', min: 0, max: 1, def: 1, unit: '%', scale: .5, rnd: [.7, 1] })
+    ]);
+
+    /* ---- HOLD pad: press = engage now, release = back to live ---- */
+    const pad = h('button', 'pad', 'hold to stutter');
+    let held = false;
+    const padUp = () => { if (!held) return; held = false; gateOff(now() + .003); };
+    pad.addEventListener('pointerdown', e => {
+      e.stopPropagation(); AC.resume();
+      pad.setPointerCapture(e.pointerId); held = true; gateOn(now() + .003);
+    });
+    pad.addEventListener('pointerup', padUp);
+    pad.addEventListener('pointercancel', padUp);
+    m.ctrls.appendChild(pad);
+
+    /* ---- AUTO: on each beat, with probability Chance, stutter for Span ---- */
+    let nextBeat = null;
+    m.locate = beat => { nextBeat = Math.ceil(beat - 1e-6); };
+    m.cancelAfter = t => {                                         // stop/seek: withdraw future stutters
+      if (!gateP) return;
+      gateP.cancelScheduledValues(t); gateP.setValueAtTime(held ? 1 : 0, t);
+      nextBeat = null;
+    };
+    m.sched = (t, ahead) => {
+      const ch = m.params.chance.effective();
+      if (!T.playing || ch <= 0 || !gateP) { nextBeat = null; return; }
+      if (nextBeat == null) nextBeat = Math.ceil(T.beatAt(t) - 1e-6);
+      const span = SPANS[clamp(Math.round(m.params.span.effective()), 0, 4)];
+      let guard = 0;
+      while (T.timeAt(nextBeat) < ahead && guard++ < 64) {
+        const tb = T.timeAt(nextBeat);
+        if (tb >= t - .005 && Math.random() < ch && !held) {
+          gateOn(tb); gateOff(T.timeAt(nextBeat + span));
+          nextBeat += Math.max(1, span);
+        } else nextBeat += 1;
+      }
+    };
+
+    m.draw = t => {
+      const W = ctx.canvas.W, H = ctx.canvas.H, col = m.def.color;
+      if (!node) return FXV.noWorklet(ctx, W, H);
+      ana.getFloatTimeDomainData(ab);
+      let pk = 0; for (let i = 0; i < ab.length; i += 2) pk = Math.max(pk, Math.abs(ab[i]));
+      hist[hp] = pk; hp = (hp + 1) % hist.length;
+      ctx.clearRect(0, 0, W, H);
+      const on = stt[0] > .5, mode = m.params.mode.value;
+      pad.classList.toggle('hit', on);
+      /* slice grid: one cell per slice in a bar, transport position lit, captured slice glowing */
+      const sl = DIVS[m.params.div.value], cells = Math.max(1, Math.round(4 / sl));
+      const bp = T.playing ? ((T.beatAt() % 4) + 4) % 4 : -1, cur = bp < 0 ? -1 : Math.floor(bp / sl);
+      if (on && !wasOn) capCell = cur;
+      wasOn = on;
+      const gw = (W - 8) / cells;
+      for (let c = 0; c < cells; c++) {
+        const lit = c === cur, cap = on && c === capCell;
+        ctx.fillStyle = cap ? col : lit ? FXV.rgba(col, .55) : (c * sl) % 1 === 0 ? 'rgba(255,255,255,.16)' : 'rgba(255,255,255,.07)';
+        ctx.fillRect(4 + c * gw + .5, 2, Math.max(1, gw - 1.5), 4);
+      }
+      /* scrolling level history */
+      const n = hist.length, bw = W / n;
+      ctx.fillStyle = col;
+      for (let i = 0; i < n; i++) {
+        const v = Math.pow(hist[(hp + i) % n], .6) * (H - 22), x = i * bw;
+        ctx.globalAlpha = (on ? .22 : .12) + .4 * (i / n);
+        ctx.fillRect(x, (H - 14) / 2 - v / 2, Math.max(1, bw - 1), Math.max(1, v));
+      }
+      ctx.globalAlpha = 1;
+      if (on) {
+        const k = stt[1] | 0, pos = stt[2];
+        if (mode === 'tape stop') {                               // slowing reel
+          const tv = stt[4], cx = W / 2, cy = (H - 14) / 2, r = 22;
+          reel += tv * .35;
+          ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(4,7,12,.75)'; ctx.fill(); FXV.glow(ctx, col, 1.6);
+          for (let s = 0; s < 3; s++) {
+            const a = reel + s * Math.PI * 2 / 3;
+            ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * 5, cy + Math.sin(a) * 5); ctx.lineTo(cx + Math.cos(a) * (r - 4), cy + Math.sin(a) * (r - 4));
+            ctx.strokeStyle = col; ctx.lineWidth = 2.2; ctx.stroke();
+          }
+          FXV.label(ctx, tv > .001 ? 'TAPE STOP · speed ' + Math.round(tv * 100) + '%' : 'TAPE STOPPED', W / 2, H - 3, col, 8.5, 'center');
+        } else {                                                  // repeat blocks (rolls shrink)
+          const blocks = 12, y = 6, hh = H - 26;
+          let x = 4;
+          for (let b = 0; b < blocks && x < W - 4; b++) {
+            const ratio = mode === 'roll' ? Math.max(1 / 16, 1 / Math.pow(2, Math.floor((b) / 2))) : 1;
+            const w = Math.max(5, (W - 8) / 6 * ratio) - 2;
+            const cur = b === Math.min(k, blocks - 1), past = b < k;
+            ctx.fillStyle = cur ? FXV.rgba(col, .45) : past ? FXV.rgba(col, .16) : 'rgba(255,255,255,.04)';
+            FXV.roundRect(ctx, x, y, w, hh, 3); ctx.fill();
+            if (cur) {
+              ctx.fillStyle = col;
+              const px = mode === 'reverse' && k > 0 ? x + w * (1 - pos) : x + w * pos;
+              ctx.fillRect(px - 1, y, 2, hh);
+            }
+            x += w + 2;
+          }
+          const lab = mode === 'roll' ? 'ROLL 1/' + Math.min(128, Math.pow(2, Math.round(Math.log2(4 / Math.max(1e-4, DIVS[m.params.div.value] * stt[3])))))
+                    : mode === 'pitch' ? 'PITCH ' + (m.params.pitch.value * k > 0 ? '+' : '') + (m.params.pitch.value * k).toFixed(0) + 'st'
+                    : mode.toUpperCase() + ' ×' + (k + 1);
+          FXV.label(ctx, lab, W / 2, H - 3, col, 9, 'center');
+        }
+      } else {
+        const ch = m.params.chance.effective();
+        FXV.label(ctx, mode.toUpperCase() + ' · ' + m.params.div.value +
+                  (ch > 0 ? ' · AUTO ' + Math.round(ch * 100) + '%' : ' · ready'),
+                  W / 2, H - 3, 'rgba(255,255,255,.45)', 7.5, 'center');
+      }
+    };
+    let reel = 0, wasOn = false, capCell = -1;
+    setLen();
+  }
+};
+
+
+/* ---------------------------------------------------------------------------
+ * PUMP — drawable sidechain / volume shaper (native automation)
+ * ---------------------------------------------------------------------------
+ * The curve (32 points, 1 = full volume) is scheduled as linear ramps on a
+ * GainNode, aligned to the transport grid — or restarted by every event on
+ * the Trig input (e.g. the kick's SEQ gate) when that is patched. The same
+ * curve drives the Env output (duck amount 0..Depth) to sidechain anything.
+ * ------------------------------------------------------------------------- */
+const PUMP_N = 32;
+const PUMP_SHAPES = {
+  duck:   x => 1 - Math.exp(-x / .1),
+  smooth: x => .5 - .5 * Math.cos(2 * Math.PI * x),
+  hard:   x => (x < .3 ? 0 : 1),
+  gate:   x => (Math.floor(x * 8) % 2 === 0 ? 1 : 0),
+  saw:    x => x,
+  swell:  x => Math.pow(x, 2.5)
+};
+const pumpShape = name => Array.from({ length: PUMP_N }, (_, i) => +clamp(PUMP_SHAPES[name](i / PUMP_N), 0, 1).toFixed(4));
+DEFS.pump = {
+  name: 'PUMP', glyph: '◭', color: '#3d7bff', w: 270,
+  desc: 'sidechain volume shaper: draw the curve, sync it to the grid or retrigger it from a kick',
+  build(m) {
+    const { ac: AC, now, cah, beatSec, transport: T } = m.ctx;
+    const inn = m.node(AC.createGain()), vg = m.node(AC.createGain()), ev = m.node(AC.createConstantSource());
+    ev.offset.value = 0; ev.start();
+    inn.connect(vg);
+    m.addIn({ id: 'in', label: 'In', kind: 'sig', node: inn });
+    m.addIn({ id: 'trig', label: 'Trig', kind: 'trig', onTrig: t => retrig(t) });
+    m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: vg });
+    const ej = m.addOut({ id: 'env', label: 'Env', kind: 'sig', node: ev }); mkTap(ej);
+
+    const st = m.state;
+    st.shape = pumpShape('duck');
+    const ctx = m.viz(92), cnv = ctx.canvas;
+
+    /* ---- curve maths ---- */
+    const C = () => DIVS[m.params.rate.value];                  // cycle length in beats
+    const shapeAt = ph => {
+      ph = ((ph % 1) + 1) % 1;
+      const x = ph * PUMP_N, i = Math.floor(x), f = x - i;
+      const a = st.shape[i % PUMP_N], b = st.shape[(i + 1) % PUMP_N];
+      return a + (b - a) * f;
+    };
+    const gainOf = ph => (m.params.depth && m.params.off)
+      ? 1 - m.params.depth.value * (1 - shapeAt(ph + m.params.off.value)) : 1;
+    const trigMode = () => m.ins[1].conns.length > 0;
+
+    /* ---- grid scheduling: one ramp point per curve point, on the beat grid ---- */
+    let schedBeat = null, lastTrig = -1;
+    const setBoth = (g, t, ramp) => {
+      if (ramp) { vg.gain.linearRampToValueAtTime(g, t); ev.offset.linearRampToValueAtTime(1 - g, t); }
+      else      { vg.gain.setValueAtTime(g, t);          ev.offset.setValueAtTime(1 - g, t); }
+    };
+    function anchor(beat, time) {
+      cah(vg.gain, time); cah(ev.offset, time);
+      setBoth(gainOf(beat / C()), time, false);
+      schedBeat = beat;
+    }
+    const reanchor = () => { if (m.params.off && T.playing && !trigMode()) { const t = now() + .03; anchor(T.beatAt(t), t); } };
+    m.locate = (beat, time) => { if (!trigMode()) anchor(beat, time); };
+    m.setT = reanchor;
+    m.cancelAfter = t => {                                       // stop/seek: back to unity
+      cah(vg.gain, t); cah(ev.offset, t);
+      vg.gain.setTargetAtTime(1, t, .015); ev.offset.setTargetAtTime(0, t, .015);
+      schedBeat = null;
+    };
+    m.sched = (t, ahead) => {
+      if (trigMode() || !T.playing) return;
+      if (schedBeat == null) anchor(T.beatAt(t + .01), t + .01);
+      const target = T.beatAt(ahead), step = C() / PUMP_N;
+      let guard = 0;
+      while (schedBeat < target && guard++ < 512) {
+        const nb = (Math.floor(schedBeat / step + 1e-7) + 1) * step;
+        setBoth(gainOf(nb / C()), T.timeAt(nb), true);
+        schedBeat = nb;
+      }
+    };
+    /* ---- trigger mode: run the curve once per event ---- */
+    function retrig(t) {
+      const cyc = C() * beatSec();
+      cah(vg.gain, t); cah(ev.offset, t);
+      for (let i = 0; i < PUMP_N; i++) setBoth(gainOf(i / PUMP_N), t + i / PUMP_N * cyc, i > 0);
+      lastTrig = t;
+    }
+
+    /* ---- controls ---- */
+    const row = h('div', 'row');
+    row.appendChild(m.param({ k: 'select', id: 'rate', label: 'Rate', opts: ['2/1', '1/1', '1/2', '1/4', '1/8', '1/16', '1/4T', '1/8T'], def: '1/4',
+      set: () => reanchor() }));
+    row.appendChild(m.param({ k: 'select', id: 'shape', label: 'Shape', opts: [...Object.keys(PUMP_SHAPES), 'custom'], def: 'duck',
+      set: v => { if (PUMP_SHAPES[v]) { st.shape = pumpShape(v); reanchor(); } } }));
+    m.ctrls.appendChild(row);
+    const kr = m.knobs([
+      { k: 'knob', id: 'depth', label: 'Depth', min: 0, max: 1, def: .85, unit: '%', mod: { scale: .5 }, set: () => reanchor() },
+      { k: 'knob', id: 'off', label: 'Offset', min: 0, max: 1, def: 0, unit: '%', mod: { scale: .5 }, set: () => reanchor() }
+    ]);
+    /* preset thumbnails: see the shape before you pick it */
+    const th = h('div', 'fxgrid'); th.style.gridTemplateColumns = 'repeat(3,1fr)';
+    const thumbs = Object.keys(PUMP_SHAPES).map(name => {
+      const b = h('button', 'tg thumb'); b.title = name;
+      const c = h('canvas'); c.width = 72; c.height = 28; b.appendChild(c);
+      const g = c.getContext('2d'), pts = pumpShape(name);
+      g.beginPath();
+      for (let i = 0; i <= PUMP_N; i++) { const x = 3 + i / PUMP_N * 66, y = 24 - pts[i % PUMP_N] * 20; i ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.strokeStyle = m.def.color; g.lineWidth = 2.2; g.stroke();
+      b.addEventListener('pointerdown', e => e.stopPropagation());
+      b.onclick = () => { const p = m.params.shape, before = p.value; p.setValue(name); recParam(p, before, { merge: false }); };
+      th.appendChild(b);
+      return [name, b];
+    });
+    kr.appendChild(th);
+
+    /* ---- draw the curve on the canvas (Shift = straight line) ---- */
+    const PAD = 6;
+    const toPt = e => {
+      const r = cnv.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width * cnv.W, y = (e.clientY - r.top) / r.height * cnv.H;
+      return { i: clamp(Math.floor((x - PAD) / (cnv.W - PAD * 2) * PUMP_N), 0, PUMP_N - 1),
+               v: clamp(1 - (y - PAD) / (cnv.H - PAD * 2 - 10), 0, 1) };
+    };
+    const paint = (a, b) => {                                   // fill every point between a and b
+      const n = Math.abs(b.i - a.i);
+      for (let k = 0; k <= n; k++) {
+        const f = n ? k / n : 1, i = Math.round(lerp(a.i, b.i, f));
+        st.shape[i] = +lerp(a.v, b.v, f).toFixed(4);
+      }
+    };
+    cnv.addEventListener('pointerdown', e => {
+      e.stopPropagation(); select(m);
+      cnv.setPointerCapture(e.pointerId);
+      const ed = stateEditor(m), start = toPt(e), orig = st.shape.slice();
+      let last = start;
+      paint(start, start);
+      const mv = ev2 => {
+        const p = toPt(ev2);
+        if (ev2.shiftKey) { st.shape = orig.slice(); paint(start, p); }
+        else paint(last, p);
+        last = p;
+      };
+      const up = () => {
+        cnv.removeEventListener('pointermove', mv); cnv.removeEventListener('pointerup', up);
+        const sp = m.params.shape;
+        if (sp.value !== 'custom') { sp.value = 'custom'; sp.render(); }
+        ed.commit('draw pump curve');
+        reanchor();
+      };
+      cnv.addEventListener('pointermove', mv); cnv.addEventListener('pointerup', up);
+    });
+
+    m.draw = () => {
+      const W = cnv.W, H = cnv.H, col = m.def.color, depth = m.params.depth.value, off = m.params.off.value;
+      for (const [name, b] of thumbs) b.classList.toggle('on', m.params.shape.value === name);
+      const x0 = PAD, x1 = W - PAD, y0 = PAD, y1 = H - PAD - 10;
+      const X = ph => x0 + ph * (x1 - x0), Y = v => y1 - v * (y1 - y0);
+      ctx.clearRect(0, 0, W, H);
+      FXV.grid(ctx, W, H - 10, 8, 4);
+      /* curve (raw shape) */
+      ctx.beginPath();
+      for (let i = 0; i <= 64; i++) { const ph = i / 64, x = X(ph), y = Y(shapeAt(ph + off)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.lineTo(x1, y1); ctx.lineTo(x0, y1); ctx.closePath();
+      const g = ctx.createLinearGradient(0, y0, 0, y1);
+      g.addColorStop(0, FXV.rgba(col, .42)); g.addColorStop(1, FXV.rgba(col, .03));
+      ctx.fillStyle = g; ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i <= 64; i++) { const ph = i / 64, x = X(ph), y = Y(shapeAt(ph + off)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      FXV.glow(ctx, col, 1.6);
+      /* ghost: the gain actually applied at this Depth */
+      ctx.beginPath();
+      for (let i = 0; i <= 64; i++) { const ph = i / 64, x = X(ph), y = Y(1 - depth * (1 - shapeAt(ph + off))); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
+      /* playhead */
+      let ph = null;
+      if (trigMode()) { const e = (now() - lastTrig) / (C() * beatSec()); if (lastTrig >= 0 && e >= 0 && e < 1) ph = e; }
+      else if (T.playing) { const b = T.beatAt(); ph = ((b / C()) % 1 + 1) % 1; }
+      if (ph != null) {
+        const x = X(ph), y = Y(1 - depth * (1 - shapeAt(ph + off)));
+        ctx.fillStyle = FXV.rgba(col, .18); ctx.fillRect(x - 1, y0, 2, y1 - y0);
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+        ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI * 2); ctx.fillStyle = FXV.rgba(col, .3); ctx.fill();
+      }
+      const info = (trigMode() ? 'TRIG · ' : 'SYNC · ') + m.params.rate.value + ' · ' + m.params.shape.value;
+      FXV.label(ctx, info, x0, H - 2, 'rgba(255,255,255,.45)', 7.5);
+      const iw = ctx.measureText(info).width;
+      ctx.font = '7px ui-monospace,Menlo,monospace';
+      if (x0 + iw + 12 + ctx.measureText('✎ draw · ⇧ line').width < x1)
+        FXV.label(ctx, '✎ draw · ⇧ line', x1, H - 2, 'rgba(255,255,255,.25)', 7, 'right');
+    };
+  },
+  /* ---- persistence: the drawn curve ---- */
+  save: m => ({ shape: m.state.shape.slice() }),
+  load: (m, s) => {
+    if (!s || !Array.isArray(s.shape)) return;
+    const v = s.shape.slice(0, PUMP_N).map(x => clamp(+x || 0, 0, 1));
+    while (v.length < PUMP_N) v.push(1);
+    m.state.shape = v;
+  },
+  /* share links: 32 points → 32 base-36 characters */
+  pack: m => ({ c: m.state.shape.map(v => Math.round(v * 35).toString(36)).join('') }),
+  unpack: p => (p && typeof p.c === 'string')
+    ? { shape: Array.from({ length: PUMP_N }, (_, i) => (parseInt(p.c[i] || 'z', 36) || 0) / 35) } : null
+};
+
+
 /* ---------------------------------------------------------------------------
  * 11.5 · ECHO (ping-pong delay)
  * ---------------------------------------------------------------------------
@@ -5592,12 +6794,20 @@ DEFS.keys = {
  * One button per module type. Click = drop in the middle of the view,
  * drag = place where you release. Edit ORDER to re-order / hide module types.
  * ==========================================================================*/
-const ORDER = ['osc','poly','keys','drum','filter','crush','echo','rev','env','lfo','seq','vca','mix','scope','out'];
-ORDER.forEach(type => {
+const PALETTE = [
+  ['sound',   ['osc', 'poly', 'drum', 'keys']],
+  ['control', ['seq', 'env', 'lfo']],
+  ['fx',      ['filter', 'growl', 'crush', 'smash', 'shift', 'stutter', 'pump', 'echo', 'rev']],
+  ['mix',     ['vca', 'mix', 'scope', 'out']]
+];
+const ORDER = PALETTE.flatMap(g => g[1]);          // every module type, in palette order
+const GROUP_OF = Object.fromEntries(PALETTE.flatMap(([g, ts]) => ts.map(t => [t, g])));
+ORDER.forEach((type, i) => {
   const d = DEFS[type];
+  if (i === 0 || GROUP_OF[ORDER[i - 1]] !== GROUP_OF[type]) $('#palette').appendChild(ht('div', 'pgrp', GROUP_OF[type]));
   const b = h('div', 'pbtn',
     `<span class="g" style="color:${d.color}">${d.glyph}</span><span class="t">${d.name}</span>`);
-  b.title = 'add ' + d.name;
+  b.title = d.name + ' — ' + (d.desc || '') + '  (click or drag in)';
 
   /* click: place near the centre of the viewport, with a little scatter */
   b.addEventListener('click', () => {
@@ -6111,8 +7321,80 @@ function P_ambient() {
   sc.params.mode.setValue('xy');
 }
 
+/* --------------------------------------------- built-in rack: FILTH LAB (FX)
+ * Half-time 140 BPM: a talking growl bass (OSC → GROWL morphed by a synced LFO
+ * → SMASH → SHIFT wide → STUTTER auto-rolls → PUMP retriggered by the kick)
+ * over a kick/snare/hat lane. Showcases every FX LAB module.            */
+function P_filth() {
+  clock.bpm = 140; $('#bpm').value = 140;
+  /* bass line */
+  /* columns laid out from measured module sizes, 30 px gutters */
+  const sq  = addModule('seq',      40,  40);
+  const lfo = addModule('lfo',      40, 403);
+  const osc = addModule('osc',     540,  40);
+  const env = addModule('env',     540, 376);
+  const gr  = addModule('growl',   826,  40);
+  const vca = addModule('vca',     826, 361);
+  const sm  = addModule('smash',  1118,  40);
+  const sh  = addModule('shift',  1118, 335);
+  const stt = addModule('stutter',1398,  40);
+  const pmp = addModule('pump',   1398, 327);
+  const out = addModule('out',    1728,  40);
+  const sc  = addModule('scope',  1728, 228);
+  /* drums */
+  const kq  = addModule('seq',  40,  740), kd = addModule('drum', 540,  740);
+  const sq2 = addModule('seq',  40, 1103), sd = addModule('drum', 540, 1103);
+  const hq  = addModule('seq',  40, 1466), hd = addModule('drum', 540, 1466);
+  const mx  = addModule('mix', 826, 1103), out2 = addModule('out', 1084, 1103);
+
+  sq.params.div.setValue('1/8'); sq.params.len.setValue(16); sq.params.scale.setValue('Minor'); sq.params.oct.setValue(-2);
+  sq.params.glide.setValue(.05);
+  const notes = [0, 0, 0, 12, 0, 0, 3, 0, 0, 0, 7, 0, 5, 0, 10, 7], ons = [1,0,1,1, 1,0,1,0, 1,0,1,1, 0,1,1,0];
+  sq.state.steps.forEach((s, i) => { s.on = !!ons[i % 16]; s.note = notes[i % 16]; s.gate = .92; s.vel = i % 4 ? .8 : 1; s.slide = i % 8 === 3 ? 1 : 0; });
+  osc.params.wave.setValue('saw'); osc.params.sub.setValue(.45); osc.params.lvl.setValue(.6);
+  env.params.a.setValue(.004); env.params.d.setValue(.25); env.params.s.setValue(.85); env.params.r.setValue(.06);
+  lfo.params.sync.setValue('1/8'); lfo.params.wave.setValue('triangle');
+  gr.params.drive.setValue(9); gr.params.grit.setValue(.55); gr.params.reso.setValue(2.2); gr.params.morph.setValue(.45);
+  sm.params.depth.setValue(.7);
+  sh.params.mode.setValue('wide'); sh.params.shift.setValue(.12); sh.params.fb.setValue(.35); sh.params.mix.setValue(.3);
+  stt.params.mode.setValue('roll'); stt.params.div.setValue('1/16'); stt.params.chance.setValue(.18); stt.params.span.setValue(3);
+  pmp.params.depth.setValue(.75); pmp.params.rate.setValue('1/4');
+  vca.params.gain.setValue(0);
+
+  connect(sq.outs[0], env.ins[0]);
+  connect(sq.outs[1], { m: osc, param: osc.params.fine }, 1);
+  connect(env.outs[0], { m: vca, param: vca.params.gain }, 1);
+  connect(lfo.outs[0], { m: gr, param: gr.params.morph }, .9);
+  connect(osc.outs[0], gr.ins[0]);
+  connect(gr.outs[0], vca.ins[0]);
+  connect(vca.outs[0], sm.ins[0]);
+  connect(sm.outs[0], sh.ins[0]);
+  connect(sh.outs[0], stt.ins[0]);
+  connect(stt.outs[0], pmp.ins[0]);
+  connect(pmp.outs[0], out.ins[0]);
+  connect(out.outs[0], sc.ins[0]);
+
+  /* half-time drums: kick, snare on 3, 16th hats */
+  const lane = (s, d, eng, on, vel) => {
+    s.params.div.setValue('1/16'); s.params.len.setValue(32);
+    s.state.steps.forEach((st, i) => { st.on = on(i); st.vel = vel(i); st.gate = .3; });
+    d.params.eng.setValue(eng);
+    connect(s.outs[0], d.ins[0]);
+  };
+  lane(kq, kd, 'kick',  i => [0, 10, 16, 22].includes(i), () => 1);
+  lane(sq2, sd, 'snare', i => i === 8 || i === 24, () => 1);
+  lane(hq, hd, 'hat',   i => i % 2 === 0, i => (i % 4 ? .45 : .8));
+  kd.params.drive.setValue(3); kd.params.dec.setValue(.5);
+  sd.params.dec.setValue(.45); sd.params.tone.setValue(.65);
+  hd.params.dec.setValue(.08); hd.params.lvl.setValue(.6);
+  connect(kd.outs[0], mx.ins[0]); connect(sd.outs[0], mx.ins[1]); connect(hd.outs[0], mx.ins[2]);
+  connect(mx.outs[0], out2.ins[0]);
+  connect(kq.outs[0], pmp.ins[1]);                                  // kick gate retriggers the PUMP
+  out.params.gain.setValue(.7); out2.params.gain.setValue(.8);
+}
+
 /** Built-in racks, shown in the preset dropdown and the library. */
-const BUILTIN = { init: P_init, acid: P_acid, drums: P_drums, ambient: P_ambient };
+const BUILTIN = { init: P_init, acid: P_acid, drums: P_drums, ambient: P_ambient, filth: P_filth };
 
 
 

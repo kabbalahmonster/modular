@@ -12,6 +12,8 @@ is compressed into the link's `#hash`, so no server is ever involved.
 > **Status note:** a code review found 4 critical, 4 high, 10 medium and 12 low
 > issues. All 30 are fixed in this revision and were re-verified in headless
 > Chromium. See [§ 14 Changelog & known issues](#14-changelog--known-issues).
+> **New:** the [FX LAB](#516-fx-lab-modern-bass-music-effects) modules SMASH,
+> GROWL, SHIFT, STUTTER and PUMP, plus the **☢ Filth Lab** preset.
 
 ---
 
@@ -173,10 +175,16 @@ A single beat-based clock (`createTransport`) drives everything tempo-related:
 
 ### Palette (left)
 
-One button per module type. **Click** adds the module near the centre of the view;
-**drag** places it where you release.
-Order: OSC, POLY, KEYS, DRUM, FILTER, CRUSH, ECHO, REVERB, ENV, LFO, SEQ, VCA,
-MIXER, SCOPE, OUT.
+One button per module type, grouped. **Click** adds the module near the centre of
+the view; **drag** places it where you release. Hovering shows the module's
+description.
+
+| Group | Modules |
+|---|---|
+| **sound** | OSC, POLY, DRUM, KEYS |
+| **control** | SEQ, ENV, LFO |
+| **fx** | FILTER, GROWL, CRUSH, SMASH, SHIFT, STUTTER, PUMP, ECHO, REVERB |
+| **mix** | VCA, MIXER, SCOPE, OUT |
 
 ### Module header buttons
 
@@ -591,6 +599,193 @@ cannot clip. The compressors add a few ms of lookahead latency (about 6 ms each)
 
 ---
 
+### 5.16 FX LAB: modern bass-music effects
+
+Five effects for aggressive, modern sound design: SMASH, GROWL, SHIFT, STUTTER and
+PUMP.
+
+* **DSP:** the first four run in AudioWorklets; PUMP is pure native automation. If a
+  browser has no AudioWorklet, the worklet modules become a clean bypass and say so
+  in their display.
+* **Inputs and outputs:** all are stereo, and every knob with a worklet parameter
+  behind it is **audio-rate modulatable**.
+* **Try them:** the **☢ Filth Lab** preset on the splash screen (§ 11) uses all five.
+
+#### SMASH: 3-band upward + downward compressor (`smash`)
+
+"OTT-style" multiband compression: loud parts are squashed and quiet detail is lifted,
+per band, so everything gets dense and in-your-face.
+
+* **Bands:** Linkwitz-Riley crossovers at 120 Hz and 2.5 kHz, phase-compensated, so at
+  Depth 0 the bands sum *exactly* flat (measured 0.00 dB).
+* **Per band:** a linked-stereo envelope follower, a downward ratio up to 66:1 above
+  its threshold, and an upward ratio up to 4:1 below its lower threshold. Upward gain
+  fades out towards −80 dB, so silence and hiss aren't pumped up.
+* **Auto make-up:** a band at −12 dBFS leaves at −12 dBFS, so SMASH densifies
+  instead of just turning loud material down. Measured: a quiet tone is lifted
+  +12 dB, a near-full-scale tone trimmed −5 dB.
+
+| Control | Range | Default | Mod | Notes |
+|---|---|---|---|---|
+| Depth | 0…1 | 0.6 | audio | Amount of compression (both directions). |
+| Time | 0…1 | 0.5 | audio | Scales attack/release ×0.1…×10. Base times: low 12/180 ms, mid 8/120 ms, high 4/90 ms. |
+| Up | 0…1 | 0.5 | audio | Upward ratio 1…4:1. |
+| Down | 0…1 | 0.7 | audio | Downward ratio 1…66:1. |
+| Low / Mid / High | ±24 dB | 0 | audio | Band output trims. |
+| Out | −24…+12 dB | 0 | audio | Output gain. |
+
+**Display:** one column per band showing:
+
+* the input level;
+* the downward (red) and upward (cyan) thresholds, as dotted lines;
+* the live gain as an arrow and block (red = squash, cyan = lift) with its dB value.
+
+An output meter sits on the right.
+
+#### GROWL: talking formant filter (`growl`)
+
+Drive → three formant resonators morphing through the vowels **U · O · A · E · I** →
+grit. This is the dubstep "yoi" machine: patch an LFO (or an envelope, or audio) into
+**Morph**.
+
+* The resonators are zero-delay-feedback state-variable bandpasses. Coefficients
+  follow the a-rate Morph every 16 samples, and are skipped when nothing moved.
+* Vowel levels were **calibrated by measurement**: loudness is constant across the
+  whole morph (RMS 0.26 at every vowel for a reference saw), while brightness rises
+  from U to E/I (spectral centroid 540 → 1150 Hz).
+
+| Control | Range | Default | Mod | Notes |
+|---|---|---|---|---|
+| Morph | 0…1 | 0.5 | audio (a-rate) | U → O → A → E → I. The readout shows the nearest vowel. |
+| Formant | ±24 st | 0 | audio | Shifts all formants: a bigger or smaller "mouth". |
+| Reso | 0.3…6 | 1.5 | audio | Formant sharpness. |
+| Drive | 1…40 | 4 | audio | Pre-filter saturation. |
+| Grit | 0…1 | 0.3 | audio | Post-filter waveshaping. |
+| Mix | 0…1 | 1 | audio | Dry/wet. |
+| **U O A E I** buttons | – | – | – | Jump Morph to a vowel (undoable). The button nearest the *live* vowel lights up. |
+
+**Display:** animated **neon lips** shaping each vowel: round pucker for U/O, open
+jaw and tongue for A, teeth and a wide smile for E/I. The jaw opens further with the
+output level. Beside them are the live formant response curve and a vowel strip.
+
+#### SHIFT: frequency shifter with feedback spirals (`shift`)
+
+A Bode frequency shifter. Unlike a pitch shifter, it moves every partial by the same
+number of Hz, which makes it inharmonic and metallic.
+
+* **Hilbert transform:** two allpass chains, about 90° apart across the audio band.
+* **Feedback delay:** saturated, so it can't run away. Each pass through the loop
+  shifts the sound again, producing endless rising or falling "barber-pole" spirals
+  and laser zaps.
+
+| Control | Range | Default | Mod | Notes |
+|---|---|---|---|---|
+| Mode | up, down, wide, ring | up | – | *wide* = left shifts up, right shifts down (huge stereo). *ring* = ring modulation. |
+| Sync | free, 1/4 … 1/32 | 1/16 | – | Feedback delay locked to tempo. |
+| Shift | ±2500 Hz (cubic) | +67 Hz | audio (a-rate) | Cubic mapping gives fine control near 0 (slow phasing) and zaps at the extremes. |
+| Feedback | 0…0.97 | 0.5 | audio | Spiral length. 🎲 stays ≤ 0.8. |
+| Time | 1…1000 ms | 90 | ctrl | Delay time when Sync = free. |
+| Mix | 0…1 | 0.7 | audio | Dry/wet. |
+
+**Display:**
+
+* **Phasor:** a rotating phasor with a comet tail. Speed is log-scaled to the shift
+  and direction follows its sign. Each feedback pass adds an inner spiral ring.
+* **Barber pole:** scrolls in the shift direction, pulses in ring mode, and shows the
+  shift in Hz.
+
+#### STUTTER: beat repeat · reverse · roll · pitch dive · tape stop (`stutter`)
+
+The input is recorded continuously. When engaged, STUTTER captures a tempo-synced
+slice **starting at that moment**. The first pass is the live signal, and each
+following pass repeats the slice.
+
+* **Engaging:** the gate is an AudioParam scheduled sample-accurately against the
+  audio clock. That means it also works in **bounces** and is cancelled cleanly by
+  Stop.
+* **Click-free:** 3 ms crossfades on engage/release and ~1.5 ms windows at slice
+  boundaries.
+
+| Control | Range | Default | Mod | Notes |
+|---|---|---|---|---|
+| Slice | 1/2 … 1/32 (incl. triplets) | 1/16 | – | Slice length, follows tempo. |
+| Mode | repeat, reverse, roll, pitch, tape stop | repeat | – | See below. |
+| Pitch | ±12 st | 0 | audio | Transposes the repeats. In *pitch* mode it is applied *per repeat* (cumulative dive/rise). |
+| Decay | 0…1 | 0 | audio | Each repeat quieter. |
+| Chance | 0…1 | 0 | ctrl | **Auto-glitch:** on every beat, with this probability, stutter for *Span*. |
+| Span | 1/16 … 1 bar | 1/8 | ctrl | Length of auto stutters. |
+| Mix | 0…1 | 1 | audio | Wet level while engaged. |
+
+Modes:
+
+* **repeat:** classic beat repeat.
+* **reverse:** repeats play backwards.
+* **roll:** the slice halves every two repeats, down to 12 ms: the build-up snare-roll
+  effect.
+* **pitch:** each repeat is transposed further by *Pitch*.
+* **tape stop:** playback speed slows to a halt over one slice length.
+
+Ways to engage:
+
+* **HOLD TO STUTTER pad:** press and hold, live.
+* **Gate input:** a SEQ gate gives rhythmic stutters; KEYS gives them while a key is
+  held.
+* **Chance:** auto-glitch, described in the table above.
+
+Verified: repeats are sample-identical to the captured slice (correlation 1.000),
+reverse is an exact mirror, and the bypass is bit-exact.
+
+**Display:**
+
+* a tempo-synced **slice grid**: one cell per slice in a bar, with the transport
+  position and the captured slice lit;
+* a scrolling level history;
+* while engaged: repeat blocks with a playhead (shrinking for *roll*) and a mode banner
+  such as `REPEAT ×4`, `ROLL 1/64` or `PITCH −6st`;
+* in *tape stop*, a slowing tape reel.
+
+#### PUMP: drawable sidechain / volume shaper (`pump`)
+
+A tempo-synced volume curve (the "LFO Tool / Kickstart" workflow) that you **draw**.
+
+* **Native automation:** PUMP is built from native Web Audio automation (one ramp per
+  curve point on a GainNode), so it costs almost nothing and renders identically in
+  bounces.
+* **Env output:** the same curve is available at **Env** as a *duck amount*
+  (0…Depth), so one kick can sidechain a filter, a reverb send or anything else.
+
+| Control | Range | Default | Notes |
+|---|---|---|---|
+| Rate | 2/1 … 1/16, triplets | 1/4 | Cycle length. |
+| Shape | duck, smooth, hard, gate, saw, swell, custom | duck | Preset curves. Drawing switches to *custom*. |
+| Depth | 0…1 | 0.85 | How far the curve pulls the level down (control-rate modulatable). |
+| Offset | 0…1 | 0 | Phase shift of the curve within the cycle. |
+| Shape thumbnails | – | – | Click a mini-preview to pick a preset (undoable). |
+
+Modes:
+
+* **Sync (default):** the curve runs on the transport grid and is phase-locked to the
+  bar. On Stop it returns smoothly to unity gain.
+* **Trig:** when anything is patched into **Trig** (typically the kick's SEQ Gate),
+  each event restarts the curve, so the pump follows the actual kick pattern, even a
+  syncopated one.
+
+Drawing:
+
+* Click or drag on the curve to draw it (32 points).
+* **Shift+drag** draws a straight line from where you pressed.
+* Each stroke is one undo step.
+* The curve is saved with patches and included in share links (32 characters).
+
+**Display:**
+
+* the curve with a glow and gradient fill;
+* a dashed ghost of the gain actually applied at the current Depth;
+* a live playhead dot;
+* the mode, rate and shape.
+
+---
+
 ## 6. The sequencer in depth
 
 ### Step model
@@ -869,6 +1064,7 @@ Further details:
 | **acid** (128 BPM) | SEQ (PentMin, swing, slides, a ratchet) → OSC saw + sub → FILTER 24 dB (resonant; modulated by ENV + a slow LFO) → CRUSH → VCA (opened by the ENV, whose velocity sensitivity carries the accents, so it closes fully between notes) → ECHO 1/8T → OUT → SCOPE. |
 | **drums** (122 BPM) | Three SEQ→DRUM lanes (kick, snare, hat; velocity → level) → MIXER → REVERB → OUT → SCOPE in *stack* mode. |
 | **ambient** (68 BPM) | Slow Lydian SEQ with slides → two OSCs (glass + organ, detuned; random LFO drift) → FILTER (LFO + ENV) → VCA (long ENV) → ECHO → REVERB → OUT → SCOPE in XY mode. |
+| **filth / ☢ Filth Lab** (140 BPM, half-time) | FX LAB showcase. Bass: SEQ (Minor, 1/8, slides) → OSC saw + sub → **GROWL** (Morph driven by a 1/8 triangle LFO) → VCA (ENV) → **SMASH** → **SHIFT** *wide* → **STUTTER** (auto *roll*, Chance 18%) → **PUMP** (retriggered by the kick gate) → OUT → SCOPE. Drums: kick / snare-on-3 / 16th-hat lanes → MIXER → second OUT. Levels balanced by measurement (bass and drum stems within 1.5 dB RMS). |
 
 Built-ins are written as code (`P_init`, `P_acid`, `P_drums`, `P_ambient`) rather
 than JSON.
@@ -901,8 +1097,8 @@ than JSON.
 | 8 | Inspector bar | `showInsp` |
 | 9 | Stage navigation, clipboard, duplicate | pan, marquee, zoom, fit, copy/cut/paste, duplicate |
 | 10 | Scheduler | `readTaps`, `pumpControl`, `pumpSched`; 10.1 live scheduler: Worker clock, adaptive look-ahead, late accounting |
-| 11 | Module definitions | `DEFS.osc … DEFS.keys` |
-| 12 | Palette | buttons from `ORDER` |
+| 11 | Module definitions | `DEFS.osc … DEFS.keys`; 11.4b FX LAB (`fxNode`, `fxKnob`, `FXV`, `DEFS.smash/growl/shift/stutter/pump`) |
+| 12 | Palette | grouped buttons from `PALETTE` (`ORDER` = flat list) |
 | 13 | Render loop | rAF: control-rate mods, visible-module drawing, cables, meter, song panel |
 | 14 | Presets & serialisation | fragments, schema/migrations, import/export, built-in racks |
 | 15 | Patch library / 15.5 Share links | localStorage UI, autosave, `SHARE` codec |
@@ -1092,7 +1288,7 @@ Line numbers are approximate (they refer to the current `index.html`).
 | `initTables(ac, table)` | Define the `organ`, `glass`, `vocal` and `digi` wavetables. |
 | `setPlay(p)` | Legacy play/stop wrapper (unused). |
 | `clock` | Legacy facade: `clock.bpm` get/set, `clock.playing`. |
-| `WORKLET_SRC` | AudioWorklet source: `crusher` (bit crusher DSP) and `rec-tap` (recorder capture, 4096-frame time-stamped chunks). |
+| `WORKLET_SRC` | AudioWorklet source: `crusher` (bit crusher), `rec-tap` (recorder capture, 4096-frame time-stamped chunks), and the FX LAB processors `smash`, `growl`, `shifter`, `stutter`, plus the shared `ftanh()` fast saturator. |
 
 ### § 3 Music & transport
 
@@ -1135,7 +1331,8 @@ Line numbers are approximate (they refer to the current `index.html`).
 | Function | Description |
 |---|---|
 | `addModule(type, x, y, id?)` | Build the module, attach header behaviour, register it, sync it to the transport, and record undo. If `build()` throws, the partial module is torn down and `null` is returned. |
-| `measure(m)` | Cache the rendered size. |
+| `measure(m)` | Cache the rendered size, then `fitCanvases(m)`. |
+| `fitCanvases(m)` | Size each module canvas's backing store to its real CSS width once laid out (canvases used to be drawn squashed horizontally, see § 14.3). |
 | `removeModule(m)` / `removeModules(list)` | Full teardown (cables → snapshot → `m.free()` / `def.free(m)` → nodes → DOM) as one undo step. |
 | `select(m, mode)` / `selectMany(list, mode)` / `pruneSelection()` / `syncSelection()` / `selectedMods()` | Selection model (`selSet`, `selMod`). |
 | `beginModuleDrag(e, anchor, additive)` | Group move with a 3 px dead-zone; one undo step. |
@@ -1179,7 +1376,23 @@ Line numbers are approximate (they refer to the current `index.html`).
 
 `DEFS.osc`, `DEFS.poly`, `DEFS.drum`, `DEFS.filter`, `DEFS.crush`, `DEFS.echo`,
 `DEFS.rev`, `DEFS.env`, `DEFS.lfo`, `DEFS.seq`, `DEFS.vca`, `DEFS.mix`, `DEFS.scope`,
-`DEFS.out` and `DEFS.keys`; see § 5. Sequencer helpers:
+`DEFS.out`, `DEFS.keys`, and FX LAB's `DEFS.smash`, `DEFS.growl`, `DEFS.shift`,
+`DEFS.stutter` and `DEFS.pump`; see § 5.
+
+FX LAB helpers:
+
+| Function | Description |
+|---|---|
+| `fxNode(m, name)` | Create the module's worklet node (stereo out; meters only when not headless), or `null` when AudioWorklet is unavailable, in which case the module wires a bypass. |
+| `fxKnob(node, setAP, def)` | Knob definition bound to a worklet AudioParam (`def.p` or `def.id`): audio-rate modulation targets plus a click-free `set`. |
+| `fxSetNow(m, param, v)` | Jump a discrete AudioParam (mode selects) immediately. |
+| `FXV.rgba / glow / grid / label / roundRect / noWorklet` | Shared drawing kit. `glow()` is a two-pass halo + core stroke (cheaper than `shadowBlur` on long paths). |
+| `GROWL_V` | Vowel table shared by the worklet and the visual (formants, levels, mouth shapes). |
+| `PUMP_SHAPES`, `pumpShape(name)`, `PUMP_N` | Preset curve functions → 32-point arrays. |
+| STUTTER internals | `gateOn/gateOff` (sample-accurate gate automation), `setLen` (slice from tempo), `m.sched` auto-glitch, `m.cancelAfter`, `m.locate`. |
+| PUMP internals | `shapeAt`, `gainOf`, `anchor`, `reanchor`, grid `m.sched`, `retrig` (trigger mode), `m.cancelAfter`, `def.save/load/pack/unpack`. |
+
+Sequencer helpers:
 
 | Function | Description |
 |---|---|
@@ -1316,7 +1529,33 @@ Compatibility notes:
 | L11 | Delay-less feedback loops are muted by spec-compliant browsers. | `connect()` detects loop-closing cables (`audioPathExists`) and inserts a one-quantum `DelayNode`; toast plus inspector hint. | Self-loop and downstream loop get 2.9 ms delays; normal cables don't. |
 | L12 | UI details. | Shortcuts are inert while a dialog is open. Esc closes everything (bounce, song, even from a text field). Knob drags are incremental (no jump on Shift). Canvases re-rasterise on `devicePixelRatio` changes (`rescaleCanvases`, SCOPE `m.onDpr`). Worklets fall back to a `data:` URL (work on `file://`). The AudioContext is created on the first click (`createEngine(null)` + `startAudio()`). The library uses null-prototype objects (`__proto__` is a valid name). | Space ignored under help; Esc closes help/bounce/song; Shift toggle mid-drag: 0.200 → 0.201 (no jump); canvas 414 → 828 px at DPR 2; worklet on `file://`: yes; `ENGINE.ac === null` before the click; `__proto__` patch stored and read back. |
 
-### 14.3 Known limitations and design notes
+### 14.3 FX LAB release (new modules)
+
+* **Added:**
+  * SMASH, GROWL, SHIFT, STUTTER and PUMP (§ 5.16);
+  * the ☢ Filth Lab preset and its splash button;
+  * the grouped palette with description tooltips;
+  * an *fx lab* section in the help overlay.
+* **Found and fixed along the way:** module canvases were rasterised at
+  `module width − 16 px`, but *displayed* narrower (the jack columns take part of the
+  row). Every visualiser in the app was drawn slightly squashed and blurry. It only
+  became obvious with round shapes (SHIFT's phasor, GROWL's lips).
+  `fitCanvases()` now sizes each canvas to its real width after layout.
+* **Verified numerically** in OfflineAudioContexts:
+  * SHIFT moves 1 kHz to exactly 1.2 kHz (up) / 0.8 kHz (down) for a 200 Hz shift,
+    and stays finite at maximum feedback.
+  * STUTTER repeats, reverses and rolls are sample-identical to the captured slice,
+    and its bypass is bit-exact.
+  * SMASH sums flat at Depth 0, lifts a quiet tone by +12 dB and trims a loud one by
+    −5 dB.
+  * GROWL has equal loudness across the morph, with brightness rising from U to I.
+* **Verified functionally:**
+  * PUMP curves survive save/load, share links and undo.
+  * Stop closes STUTTER's gate and returns PUMP to unity.
+  * Bounces of the Filth Lab preset are finite and under the ceiling.
+  * All earlier regression suites still pass.
+
+### 14.4 Known limitations and design notes
 
 * **REVERB modulation is stepped.** Size/Decay/Damp/Diffuse changes rebuild the
   impulse response (at most ~7×/s, with fresh noise each time). Smooth sweeps need
@@ -1335,7 +1574,7 @@ Compatibility notes:
   tabs. Tabs that are playing audio are normally exempt, but this is
   browser-dependent.
 
-### 14.3 Testing
+### 14.5 Testing
 
 There is no test suite in the repo. All of the verification above was done by driving
 the page in headless Chromium with Playwright, using `page.evaluate` against the app's
@@ -1459,6 +1698,30 @@ these numbers.
   main thread.
 * **Collapse modules you aren't watching.** Their visuals stop; their sound doesn't.
 
+### 15.4b FX LAB cost
+
+CPU per instance was measured with the § 15.6 harness. Absolute numbers move ±30%
+between sessions on the test VM, so they are given **relative to CRUSH** in the same
+run (CRUSH ≈ 1.3–1.9% of a core there). These are worst cases: STUTTER and PUMP are
+retriggered on every 16th.
+
+| Module | Relative cost | Notes |
+|---|---|---|
+| PUMP | ~0.4–0.6× | Native automation only. |
+| SMASH | ~1.5× | 9 biquads per channel; the LR4 allpass compensation is folded into one biquad, block-wise filter stages, and mono inputs are processed once. |
+| SHIFT | ~1.9× | Hilbert pair + feedback line; the carrier uses a rotation recurrence unless Shift is audio-rate modulated. |
+| GROWL | ~2× | 3 ZDF resonators + 2 saturators per sample; coefficients are skipped when Morph/Formant/Reso are static. |
+| STUTTER | ~1.6× engaged, ≈ a copy when idle | The idle fast path just records and passes through. |
+
+Optimisations made before release, measured in isolation (8 instances, old vs new
+processor, same session):
+
+| Module | Speed-up | Change |
+|---|---|---|
+| SMASH | **3.2×** | LR4 LP+HP compensation → one Butterworth allpass (mathematically identical; output unchanged: +12.4 / −5.4 / 0.00 dB before and after); per-stage block loops instead of per-sample closures; mono inputs computed once. |
+| GROWL | **2.3×** | `ftanh()` rational approximation for drive/grit; coefficients only recomputed on change. Output level unchanged to 0.001 RMS. |
+| SHIFT | **1.2×** | Rotation recurrence instead of `cos`/`sin` per sample; no `%` per sample; `ftanh()` in the feedback path. |
+
 ### 15.5 Rules for module authors (keeping it scalable)
 
 1. **Disconnect what can't be heard.** Never rely on `gain = 0` to save CPU. Gate
@@ -1476,7 +1739,7 @@ these numbers.
 5. **Keep `draw()` cheap and allocation-free.** Reuse typed arrays, avoid
    `shadowBlur` on large paths, and draw only what changed where possible. The frame
    budget protects the rack from one slow visual, but not from death by a hundred cuts.
-6. **AudioWorklet code:** add a block-constant fast path, hoist `Math.pow`/divisions
+6. **AudioWorklet code** (FX LAB follows these; use `ftanh()` where saturation tolerates it): add a block-constant fast path, hoist `Math.pow`/divisions
    out of the sample loop, and emit silence early when unpatched.
 7. **Control-rate parameters are for slow things.** Anything that must be smooth or
    audio-rate should declare `mod.targets` (AudioParams) instead.
