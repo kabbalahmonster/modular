@@ -394,28 +394,83 @@ button.bk.has{box-shadow:inset 0 -2px 0 var(--mc)}
 button.bk.pend{animation:rblink .6s infinite}
 /* song arranger */
 #song{position:absolute;left:0;right:0;bottom:0;z-index:35;display:none;flex-direction:column;
-  max-height:46%;background:rgba(8,11,18,.97);border-top:1px solid var(--line2);
-  backdrop-filter:blur(10px);cursor:default}
+  height:min(440px,58%);background:rgba(8,11,18,.97);border-top:1px solid var(--line2);
+  backdrop-filter:blur(10px);cursor:default;box-shadow:0 -20px 40px -20px #000}
 #song.open{display:flex}
-.sg-head{display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
-.sg-head .num{width:46px;cursor:text}
-.sg-body{display:flex;overflow-y:auto;flex:1;min-height:0}
-.sg-labels{flex:none;width:110px;border-right:1px solid var(--line)}
-.sg-labels div{height:26px;line-height:26px;padding:0 8px;font-size:9.5px;letter-spacing:.1em;
-  text-transform:uppercase;white-space:nowrap;overflow:hidden}
-.sg-labels div.sp{height:18px}
-.sg-scroll{flex:1;overflow-x:auto;overflow-y:hidden;min-width:0}
-.sg-inner{position:relative}
-.sg-ruler{height:18px;position:relative;cursor:pointer;border-bottom:1px solid var(--line)}
-.sg-ruler span{position:absolute;top:3px;font:8.5px var(--mono);color:var(--dim);padding-left:3px;pointer-events:none}
-.sg-row{height:26px;position:relative;border-bottom:1px solid var(--line)}
-.sg-clip{position:absolute;top:3px;bottom:3px;border-radius:5px;background:rgba(255,255,255,.13);
-  background:color-mix(in srgb,var(--mc) 35%,transparent);border:1px solid var(--mc);
-  font:bold 10px var(--mono);color:#fff;display:flex;align-items:center;padding-left:6px;
-  cursor:grab;overflow:hidden}
-.sg-clip .rh{position:absolute;right:0;top:0;bottom:0;width:7px;cursor:ew-resize;background:rgba(255,255,255,.18)}
-.sg-ph{position:absolute;top:0;bottom:0;width:2px;background:var(--warn);pointer-events:none;box-shadow:0 0 8px var(--warn)}
-#song.sg-off .sg-clip{opacity:.5}                        /* song mode off = clips are just a sketch */
+.sg-head{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+.sg-head .tg,.sg-insp .tg{flex:none;padding:4px 8px}
+.sg-title{font:600 10px var(--sans);letter-spacing:.28em;color:var(--acc);margin-right:4px}
+.sg-sep{width:1px;height:18px;background:var(--line2);margin:0 3px;flex:none}
+.sg-info{font:9.5px var(--mono);color:var(--dim);white-space:nowrap}
+.sg-zoom{width:80px;flex:none}
+.sg-head .sel2{flex:none;width:auto}
+.tg.sg-make{border-color:rgba(253,224,71,.55);color:#fde68a;background:linear-gradient(180deg,rgba(253,224,71,.16),rgba(253,224,71,.04))}
+.tg.sg-make:hover{background:rgba(253,224,71,.25)}
+.tg.sg-make.big{font-size:11px;padding:10px 18px;letter-spacing:.12em}
+.tg.rec{border-color:var(--warn);color:#fff;background:rgba(251,113,133,.22);box-shadow:0 0 12px rgba(251,113,133,.35)}
+.tg.sg-del:hover{border-color:var(--warn);color:var(--warn)}
+.sg-insp{display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap;
+  background:rgba(255,255,255,.02)}
+.sg-insp .sel2{flex:none;width:auto}
+.sg-empty-b .tg{flex:none;padding:10px 18px}
+.sg-name{font:600 11px var(--sans);width:130px;cursor:text;border-width:1px 1px 1px 4px;padding:4px 8px}
+.sg-bars{font:11px var(--mono);min-width:26px;text-align:center;color:#fff}
+.sg-body2{flex:1;min-height:0;position:relative;display:flex}
+.sg-scroll2{flex:1;overflow:auto;min-width:0}
+.sg-content{position:relative;min-height:100%}
+.sg-r{display:flex;border-bottom:1px solid rgba(255,255,255,.04)}
+.sg-lab{flex:none;width:168px;position:sticky;left:0;z-index:3;background:rgb(11,14,22);border-right:1px solid var(--line);
+  display:flex;align-items:center;gap:6px;padding:0 8px;font-size:9.5px;color:#cfe0f5;min-width:0;overflow:hidden}
+.sg-lab.sg-hdr{font:8px var(--sans);letter-spacing:.22em;color:var(--dim)}
+.sg-area{position:relative;flex:none}
+.sg-ruler2{height:18px;position:sticky;top:0;z-index:4;background:rgb(9,12,19)}
+.sg-ruler2 .sg-area{cursor:pointer}
+.sg-ruler2 span{position:absolute;top:3px;font:8.5px var(--mono);color:var(--dim);padding-left:3px;pointer-events:none;
+  border-left:1px solid rgba(255,255,255,.12);height:12px}
+.sg-scenes{height:46px;position:sticky;top:18px;z-index:4;background:rgb(9,12,19);border-bottom:1px solid var(--line2)}
+.sg-scene{position:absolute;top:5px;bottom:5px;border-radius:9px;cursor:grab;overflow:hidden;padding:4px 9px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--kc) 30%,transparent),color-mix(in srgb,var(--kc) 12%,transparent));
+  border:1px solid color-mix(in srgb,var(--kc) 70%,transparent);transition:box-shadow .15s,filter .15s}
+.sg-scene:hover{filter:brightness(1.2)}
+.sg-scene.sel{box-shadow:0 0 0 2px var(--kc),0 0 18px -2px var(--kc);border-color:var(--kc)}
+.sg-scene.play::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--kc);box-shadow:0 0 10px var(--kc)}
+.sg-scene.looped{outline:1px dashed var(--kc);outline-offset:2px}
+.sg-scene.drag{z-index:5;opacity:.85;cursor:grabbing;box-shadow:0 10px 24px -6px #000}
+.sg-sn{font:600 11px var(--sans);color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;outline:none}
+.sg-sn[contenteditable=true]{background:rgba(0,0,0,.4);border-radius:3px;cursor:text}
+.sg-sm{font:8.5px var(--mono);color:rgba(255,255,255,.65);white-space:nowrap;overflow:hidden}
+.sg-rh{position:absolute;right:0;top:0;bottom:0;width:8px;cursor:ew-resize;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25))}
+.sg-ins{position:absolute;top:2px;bottom:2px;width:3px;border-radius:2px;background:#fff;box-shadow:0 0 10px #fff;display:none;z-index:6}
+.sg-div{height:17px}
+.sg-track{height:30px}
+.sg-track .sg-lab{border-left:3px solid var(--mc)}
+.sg-role{color:var(--mc);font-size:12px;width:14px;text-align:center;flex:none}
+.sg-tn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.sg-rn,.sg-pn{font-size:8px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;white-space:nowrap}
+.sg-cell{position:absolute;top:4px;bottom:4px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:5px;padding:0 4px;
+  border:1px dashed rgba(255,255,255,.1);overflow:hidden;transition:background .12s}
+.sg-cell:hover{border-color:rgba(255,255,255,.3)}
+.sg-cell.on{background:color-mix(in srgb,var(--mc) 22%,transparent);border:1px solid color-mix(in srgb,var(--mc) 65%,transparent)}
+.sg-cell.on.live{border-style:dashed}
+.sg-chip{font:700 9px var(--mono);color:#000;background:var(--mc);border-radius:4px;padding:1px 4px;flex:none;cursor:pointer}
+.sg-chip:hover{filter:brightness(1.25)}
+.sg-mini{flex:none;opacity:.9;pointer-events:none}
+.sg-lane{height:36px}
+.sg-lane .sg-lab{border-left:3px solid var(--mc)}
+.sg-lane .sg-pn{color:var(--mc)}
+.sg-lv{margin-left:auto;font:8.5px var(--mono);color:#fff;white-space:nowrap}
+.sg-lane.flash .sg-lab{background:color-mix(in srgb,var(--mc) 25%,rgb(11,14,22))}
+.sg-lc{display:block;cursor:ns-resize}
+.sg-x{padding:0 4px;font-size:9px;border-color:transparent;background:none;color:var(--dim);flex:none}
+.sg-x:hover{color:var(--warn)}
+.sg-hint{height:24px}
+.sg-hinttxt{position:sticky;left:176px;font:9px var(--sans);color:var(--dim);line-height:24px;padding-left:8px;white-space:nowrap}
+.sg-ph2{position:absolute;top:0;bottom:0;width:2px;background:var(--warn);pointer-events:none;box-shadow:0 0 8px var(--warn);z-index:5}
+.sg-empty{margin:auto;max-width:560px;text-align:center;padding:20px}
+.sg-empty-t{font:600 16px var(--sans);color:#fff;letter-spacing:.04em;margin-bottom:8px}
+.sg-empty-s{font-size:11.5px;line-height:1.6;color:#aebdd6;margin-bottom:16px}
+.sg-empty-b{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+#song.sg-off .sg-scene,#song.sg-off .sg-cell{opacity:.45}
 /* export dialog */
 .exprow{display:flex;align-items:center;gap:10px;margin:9px 0}
 .exprow .lbl{width:110px}
@@ -459,7 +514,7 @@ button.bk.pend{animation:rblink .6s infinite}
       <button id="stop" title="Stop &amp; rewind">■</button>
       <span class="lbl">bpm</span>
       <input id="bpm" class="num" value="124" title="type a value, or drag up/down">
-      <span id="pos" class="lbl" style="font-family:var(--mono);min-width:56px;text-align:center">001.1.1</span>
+      <span id="pos" class="lbl" style="font-family:var(--mono);min-width:56px;text-align:center;white-space:nowrap">001.1.1</span>
     </div>
     <div class="sep"></div>
 
@@ -666,8 +721,10 @@ button.bk.pend{animation:rblink .6s infinite}
       <li>Play: <kbd>K</kbd> piano keys (<kbd>Z</kbd>/<kbd>X</kbd> octave) · <b>MIDI</b> button for a controller ·
           <b>learn</b> then click a knob and move a CC · SEQ <b>● rec</b> records what you play
           (QWERTY, MIDI or a KEYS module's on-screen keys).</li>
-      <li>Song: <kbd>S</kbd> opens the arranger. Patterns A–H per SEQ; click a letter to switch at loop end
-          (<kbd>Shift</kbd> = now). <b>bounce</b> renders audio faster than real time (optional stems).</li>
+      <li>Song: <kbd>S</kbd> opens the arranger. <b>✨ make song</b> turns your loop into a full arrangement.
+          Scenes = sections; click a cell to bring a part in or out, click its letter to change pattern,
+          select a scene and turn any knob to automate it (<b>● capture</b>). <b>↗ sweep</b> glides values across
+          a scene; <b>roll / gap / stutter</b> add fills. <b>bounce</b> renders the whole song.</li>
       <li>● record: with <b>bars</b> = N the take starts on the next bar line (or with the transport,
           if stopped) and is exactly N bars long.</li>
     </ul>
@@ -1864,13 +1921,18 @@ class P {
    * @param {boolean} [silent] skip the inspector refresh (used while loading)
    */
   setValue(v, silent) {
+    const old = this.value;
     this.value = (this.k === 'select') ? v : clamp(v, this.min, this.max);
     if (this.step && this.k === 'knob') {
       this.value = Math.round(this.value / this.step) * this.step;
     }
     this.apply();
     this.render();
-    if (!silent && selMod === this.m) showInsp();
+    if (!silent) {
+      this._touch = performance.now();                       // scene automation yields while you hold it
+      if (typeof songCapture === 'function') songCapture(this, old);
+      if (selMod === this.m) showInsp();
+    }
   }
 
   /** Called whenever cables into this parameter are added/removed. */
@@ -2127,7 +2189,9 @@ function wireTransport(engine) {
   const cancelAll = t => mine().forEach(m => { if (m.cancelAfter) { try { m.cancelAfter(t); } catch (e) {} } });
   T.on('play', locateAll);
   T.on('seek', info => { if (info.time != null) cancelAll(engine.now()); locateAll(info); });
-  T.on('loop', locateAll);                        // seamless wrap → sequencers jump to loop start
+  T.on('loop', info => { T._fills = null; locateAll(info); });   // seamless wrap → sequencers jump to loop start
+  T.on('play', () => { T._fills = null; });
+  T.on('seek', () => { T._fills = null; });
   T.on('stop',  ({ rewind }) => { cancelAll(engine.now()); mine().forEach(m => m.onStop && m.onStop(rewind)); });
   T.on('tempo', () => mine().forEach(m => m.setT && m.setT()));
 }
@@ -3449,7 +3513,9 @@ function schedTick() {
   /* loop wrap: flush events up to the loop end, jump back, continue */
   const tLoop = transport.loopCrossing(ahead);
   if (tLoop != null) { pumpSched(t, tLoop); transport.wrapLoop(); }
+  songAutomate(transport, t + .02);               // scene knob values (SECTION 20)
   pumpSched(t, ahead);
+  songFills(transport, t, ahead);
   SCHED.prevAhead = ahead;
   songTick();                                     // "song finished" check (SECTION 20)
   SCHED.ticks++; SCHED.work += performance.now() - w0;
@@ -4787,7 +4853,7 @@ DEFS.shift = {
  * STUTTER — tempo-synced beat repeat · reverse · roll · pitch dive · tape stop
  * ------------------------------------------------------------------------- */
 DEFS.stutter = {
-  name: 'STUTTER', glyph: '⫼', color: '#00ffb3', w: 300,
+  name: 'STUTTER', glyph: '≋', color: '#00ffb3', w: 300,
   desc: 'beat repeat / reverse / roll / pitch dive / tape stop — hold the pad, gate it, or let it glitch on its own',
   build(m) {
     const { ac: AC, now, setAP, beatSec, transport: T } = m.ctx;
@@ -4811,6 +4877,7 @@ DEFS.stutter = {
     m.addIn({ id: 'gate', label: 'Gate', kind: 'trig',
               onTrig: (t, v, dur) => { gateOn(t); if (dur != null) gateOff(t + dur); },
               onRel: t => gateOff(t) });
+    m.engage = (t, dur) => { gateOn(t); gateOff(t + dur); };           // song fills
     m.addOut({ id: 'out', label: 'Out', kind: 'sig', node: out });
 
     const ctx = m.viz(88);
@@ -6150,13 +6217,21 @@ DEFS.seq = {
       const atStart = (dir === 'rev') ? i === L - 1 : (dir === 'random' || dir === 'brownian' || i === 0);
       if (st.pending != null && atStart) m.setBank(st.pending);
       /* 2 · song clip overrides the pattern: null = no song control, -1 = silent gap */
-      const sb = song.bankFor(m.id, transport.beatAt(t));
+      const bt = transport.beatAt(t);
+      const sb = song.bankFor(m.id, bt);
       const bank = (sb != null) ? sb : st.bank;
       st.q.push({ t, i, b: (sb != null) ? sb : -2 });
       st.hist.push({ t, i, dur: stepDur(st.abs) });
       if (st.hist.length > 8) st.hist.shift();
       if (bank < 0) return;
-      const s = st.banks[bank][i];
+      /* 3 · scene fill: a snare roll replaces the pattern in the scene's last bar */
+      const roll = song.rollFor(m.id, bt);
+      let s;
+      if (roll) {
+        if (!roll.on) return;
+        const base = st.banks[bank].find(x => x.on) || st.banks[bank][i];
+        s = { on: true, note: base.note, vel: roll.vel, gate: .4, prob: 1, ratch: roll.ratch, slide: 0 };
+      } else s = st.banks[bank][i];
       if (!s || !s.on) return;
       if (Math.random() > s.prob) return;
       const sc   = SCALES[m.params.scale.value];
@@ -6919,7 +6994,8 @@ function frame(t) {
     $('#meter i').style.width = clamp(pk * 100, 0, 100) + '%';
   }
   /* 5 · transport readout + song panel */
-  posEl.textContent = fmtPos(transport.beatAt());
+  { const b = transport.beatAt(), sn = songSceneName(b);
+    posEl.textContent = fmtPos(b) + (sn ? ' · ' + sn : ''); }
   songUI.tick();
   perfUI.tick();
   UI.frameMs += ((performance.now() - f0) - UI.frameMs) * .1;     // EWMA for the perf panel
@@ -7041,7 +7117,7 @@ function exportFragment(mods = modules, { cables = true } = {}) {
 function serialize() {
   const d = { ...exportFragment(modules), kind: 'patch', bpm: transport.bpm };
   const sg = song.snapshot(true);                       // drops clips of deleted sequencers
-  if (sg.on || sg.loop || sg.bars !== 8 || Object.keys(sg.tracks).length) d.song = sg;
+  if (sg.on || sg.loop || sg.bars !== 8 || Object.keys(sg.tracks).length || sg.scenes.length || sg.lanes.length) d.song = sg;
   return d;
 }
 /**
@@ -7772,8 +7848,19 @@ setInterval(() => {
     const s = song.snapshot(true);
     const t = Object.entries(s.tracks).filter(([id, c]) => idx.has(id) && c.length)
       .map(([id, c]) => [idx.get(id), c.map(x => [x.s, x.l, x.b])]);
-    if (!t.length && !s.on && !s.loop && s.bars === 8) return undefined;
-    return { o: s.on ? 1 : 0, l: s.loop ? 1 : 0, n: s.bars, t };
+    /* scenes: [name, kind, bars, flags(sweep|roll|gap|stutter), [[modIdx, bank]…]] */
+    const sidx = new Map(s.scenes.map((x, i) => [x.id, i]));
+    const sc = s.scenes.map(x => [x.name, SCENE_KIND_LIST.indexOf(x.kind), x.bars,
+      (x.sweep ? 1 : 0) | (x.fx.roll ? 2 : 0) | (x.fx.gap ? 4 : 0) | (x.fx.stutter ? 8 : 0),
+      Object.entries(x.seq).filter(([id]) => idx.has(id)).map(([id, b]) => [idx.get(id), b])]);
+    /* lanes: [modIdx, paramId, home, [[sceneIdx, value]…]] */
+    const ln = s.lanes.filter(L => idx.has(L.key.split('.')[0])).map(L => {
+      const [mid, pid] = [L.key.slice(0, L.key.indexOf('.')), L.key.slice(L.key.indexOf('.') + 1)];
+      return [idx.get(mid), pid, sig4(L.home), Object.entries(L.vals).map(([sid, v]) => [sidx.get(sid), sig4(v)])];
+    });
+    if (!t.length && !sc.length && !s.on && !s.loop && s.bars === 8) return undefined;
+    return { o: s.on ? 1 : 0, l: s.loop ? 1 : 0, n: s.bars, t: t.length ? t : undefined,
+             sc: sc.length ? sc : undefined, ln: ln.length ? ln : undefined };
   }
 
   
@@ -7807,6 +7894,24 @@ setInterval(() => {
     });
   }
   const sig4 = v => (typeof v === 'number' ? Number(v.toPrecision(4)) : v);
+  /** Compact song → restore() format (validated again by song.restore). */
+  function unpackSong(g) {
+    const arr = x => (Array.isArray(x) ? x : []);
+    const scenes = arr(g.sc).slice(0, MAX_SCENES).map((x, i) => {
+      x = arr(x); const f = +x[3] || 0;
+      return { id: 's' + (i + 1), name: String(x[0] == null ? '' : x[0]), kind: SCENE_KIND_LIST[+x[1]] || 'verse',
+               bars: +x[2] || 8, sweep: !!(f & 1), fx: { roll: !!(f & 2), gap: !!(f & 4), stutter: !!(f & 8) },
+               seq: Object.fromEntries(arr(x[4]).map(([mi, b]) => ['m' + ((+mi | 0) + 1), b])) };
+    });
+    const lanes = arr(g.ln).slice(0, MAX_LANES).map(x => {
+      x = arr(x);
+      return { key: 'm' + ((+x[0] | 0) + 1) + '.' + String(x[1]), home: x[2],
+               vals: Object.fromEntries(arr(x[3]).map(([si, v]) => ['s' + ((+si | 0) + 1), v])) };
+    });
+    return { on: !!g.o, loop: !!g.l, bars: +g.n || 8, scenes, lanes,
+      tracks: Object.fromEntries(arr(g.t).map(([i, cl]) =>
+        ['m' + ((+i | 0) + 1), arr(cl).map(([s, l, b]) => ({ s, l, b }))])) };
+  }
   /** Compact JSON string -> schema-v2 patch (throws on anything malformed). */
   function unpack(json) {
     const o = JSON.parse(json);
@@ -7829,11 +7934,7 @@ setInterval(() => {
       }),
       cs: cs.map(c => ({ f: ['m' + (c[0] + 1), String(c[1])],
                          t: ['m' + (c[2] + 1), String(c[3])], a: num(c[4]) })),
-                         song: o.sg ? {
-        on: !!o.sg.o, loop: !!o.sg.l, bars: num(o.sg.n) || 8,
-        tracks: Object.fromEntries((Array.isArray(o.sg.t) ? o.sg.t : []).map(([i, cl]) =>
-          ['m' + (i + 1), (Array.isArray(cl) ? cl : []).map(([s, l, b]) => ({ s, l, b }))]))
-      } : undefined
+                         song: o.sg ? unpackSong(o.sg) : undefined
     };
   }
   return {
@@ -8301,56 +8402,182 @@ window.addEventListener('blur', () => noteInput.panic());          // never leav
 /* =============================================================================
  * 20 · SONG (data model + arranger panel)
  * ==========================================================================*/
-/* ===== BLOCK: SONG MODEL ==================================================== */
-const song = {
-  on: false,               // arrangement controls the sequencers
-  loop: false,             // transport wraps at `bars` bars
-  bars: 8,                 // song / loop length
-  brush: 0,                // UI only: pattern used for new clips
-  tracks: Object.create(null),   // seqModuleId → [{s,l,b}]  (no prototype = safe for hostile ids)
-  rev: 0,                  // bumps on every change → UI re-render signature
+/* ===== BLOCK: SONG MODEL (scenes) ==========================================
+ * A song is a row of SCENES. Each scene has a length in bars and says:
+ *   seq   which pattern every SEQ plays ({seqId: 0..7}, -1 = silent; a SEQ that
+ *         is not listed simply plays its own selected pattern)
+ *   sweep true = knob values GLIDE from the previous scene's values to this
+ *         scene's across its length (builds, fades); false = they CUT at its start
+ *   fx    end-of-scene fills: roll (snare roll, last bar) · gap (silence on the last
+ *         beat — the breath before a drop) · stutter (STUTTER modules engage)
+ * Knob automation lives in LANES: {key:'m3.freq', home, vals:{sceneId: value}}.
+ * A scene without its own value holds the previous scene's (or the lane's home).
+ * Legacy per-SEQ clip arrangements (song.tracks) are converted to scenes on load.
+ * ========================================================================== */
+const SCENE_KINDS = {
+  intro: { label: 'Intro', color: '#22d3ee' },
+  verse: { label: 'Verse', color: '#4ade80' },
+  build: { label: 'Build', color: '#fbbf24' },
+  drop:  { label: 'Drop',  color: '#ff3355' },
+  break: { label: 'Break', color: '#a78bfa' },
+  outro: { label: 'Outro', color: '#94a3b8' }
+};
+const SCENE_KIND_LIST = Object.keys(SCENE_KINDS);
+const MAX_SCENES = 64, MAX_LANES = 48, MAX_SCENE_BARS = 128;
 
-  /** Pattern index for this module at `beat`; null = not under song control; -1 = silent gap. */
+const song = {
+  on: false,               // arrangement controls the rack
+  loop: false,             // transport wraps at the song end
+  bars: 8,                 // total length (derived from scenes when there are any)
+  scenes: [],
+  lanes: [],
+  tracks: Object.create(null),   // legacy clip lanes; only used when there are no scenes
+  loopScene: null,         // scene id looped while editing (null = off)
+  sel: -1,                 // UI: selected scene index
+  capture: true,           // UI: knob turns are written into the selected scene
+  starts: [0],             // derived: start bar of each scene, plus the total at the end
+  rev: 0, sid: 1,
+
+  /** Scene playing at `beat`: {k, s, b0 (start beat), len (beats), frac} or null past the end. */
+  sceneAt(beat) {
+    const S = this.scenes;
+    if (!S.length) return null;
+    const bar = (beat + 1e-4) / 4, st = this.starts;
+    if (bar < 0 || bar >= st[S.length]) return null;
+    let lo = 0, hi = S.length - 1;                 // binary search over start bars
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (st[mid] <= bar) lo = mid; else hi = mid - 1; }
+    const b0 = st[lo] * 4, len = S[lo].bars * 4;
+    return { k: lo, s: S[lo], b0, len, frac: clamp((beat - b0) / len, 0, 1) };
+  },
+  /** Pattern for a SEQ at `beat`: null = not under song control, -1 = silent. */
   bankFor(id, beat) {
     if (!this.on) return null;
-    const clips = this.tracks[id];
+    if (this.scenes.length) {
+      const a = this.sceneAt(beat);
+      if (!a) return -1;                                         // past the end
+      if (a.s.fx.gap && a.len - (beat - a.b0) <= 1 + 1e-3 && a.len > 1) return -1;   // the drop gap
+      const b = a.s.seq[id];
+      return b == null ? null : b;
+    }
+    const clips = this.tracks[id];                               // legacy clips
     if (!clips || !clips.length) return null;
-    const bar = (beat + 1e-3) / 4;                           // epsilon: bar lines don't fall on the previous bar
+    const bar = (beat + 1e-3) / 4;
     const c = clips.find(c => bar >= c.s && bar < c.s + c.l);
     return c ? c.b : -1;
   },
-  /** Plain-object copy. prune=true drops clips whose sequencer no longer exists (for saving). */
+  /** Snare-roll fill: a synthetic step for roller SEQs in the last bar of a roll scene. */
+  rollFor(id, beat) {
+    if (!this.on || !this.scenes.length) return null;
+    const a = this.sceneAt(beat);
+    if (!a || !a.s.fx.roll || !songRollers().has(id)) return null;
+    const fl = Math.min(4, a.len), p = beat - (a.b0 + a.len - fl);
+    if (p < -1e-6) return null;
+    const x = p / fl * 4;                                        // 0..4 across the fill bar
+    const grid = x < 2 ? .5 : .25;                               // 8ths, then 16ths
+    const on = Math.abs(x / grid - Math.round(x / grid)) < .03;
+    return { on, ratch: x >= 3 ? 2 : 1, vel: .45 + .55 * (x / 4) };
+  },
+  total() { return this.scenes.reduce((a, s) => a + s.bars, 0); },
+  sceneById(id) { return this.scenes.find(s => s.id === id) || null; },
+  newId() { return 's' + (this.sid++); },
+  /** Plain-object copy. prune = drop references to modules that no longer exist (saving). */
   snapshot(prune) {
-    const ids = prune ? new Set(modules.filter(m => m.type === 'seq').map(m => m.id)) : null;
+    const seqIds = prune ? new Set(modules.filter(m => m.type === 'seq').map(m => m.id)) : null;
+    const live = prune ? new Set(modules.map(m => m.id)) : null;
     const tracks = {};
     for (const id in this.tracks)
-      if (!ids || ids.has(id)) tracks[id] = this.tracks[id].map(c => ({ s: c.s, l: c.l, b: c.b }));
-    return { on: this.on, loop: this.loop, bars: this.bars, tracks };
+      if (!seqIds || seqIds.has(id)) tracks[id] = this.tracks[id].map(c => ({ s: c.s, l: c.l, b: c.b }));
+    const scenes = this.scenes.map(s => ({
+      id: s.id, name: s.name, kind: s.kind, bars: s.bars, sweep: s.sweep, fx: { ...s.fx },
+      seq: Object.fromEntries(Object.entries(s.seq).filter(([id]) => !seqIds || seqIds.has(id)))
+    }));
+    const lanes = this.lanes.filter(L => !live || (live.has(L.mid) && modById(L.mid) && modById(L.mid).params[L.pid]))
+      .map(L => ({ key: L.key, home: L.home, vals: { ...L.vals } }));
+    return { on: this.on, loop: this.loop, bars: this.bars, tracks, scenes, lanes, loopScene: this.loopScene };
   },
-  /** Validated load (also used by undo, patch load and share links). */
+  /** Validated load (undo, patch load, share links). Hostile input is clamped or dropped. */
   restore(d) {
-    d = d || {};
+    d = (d && typeof d === 'object') ? d : {};
     this.on = !!d.on; this.loop = !!d.loop;
     this.bars = clamp(Math.round(+d.bars) || 8, 1, 256);
     this.tracks = Object.create(null);
-    for (const id in (d.tracks || {})) {
-      const list = (Array.isArray(d.tracks[id]) ? d.tracks[id] : []).map(c => ({
-        s: Math.max(0, Math.round(+c.s) || 0),
-        l: Math.max(1, Math.round(+c.l) || 1),
+    for (const id of Object.keys(d.tracks || {})) {
+      if (!/^m\d{1,9}$/.test(id)) continue;
+      const list = (Array.isArray(d.tracks[id]) ? d.tracks[id] : []).slice(0, 256).map(c => ({
+        s: Math.max(0, Math.round(+c.s) || 0), l: Math.max(1, Math.round(+c.l) || 1),
         b: clamp(Math.round(+c.b) || 0, 0, SEQ_BANKS - 1) }));
       if (list.length) this.tracks[id] = list;
     }
+    const okVal = v => (typeof v === 'number' && isFinite(v)) || (typeof v === 'string' && v.length <= 32);
+    this.scenes = (Array.isArray(d.scenes) ? d.scenes : []).slice(0, MAX_SCENES)
+      .filter(s => s && typeof s === 'object').map(s => {
+        const seq = {};
+        for (const id of Object.keys(s.seq || {}))
+          if (/^m\d{1,9}$/.test(id) && Number.isFinite(+s.seq[id])) seq[id] = clamp(Math.round(+s.seq[id]), -1, SEQ_BANKS - 1);
+        const fx = (s.fx && typeof s.fx === 'object') ? s.fx : {};
+        return {
+          id: (typeof s.id === 'string' && /^s\d{1,6}$/.test(s.id)) ? s.id : null,
+          name: String(s.name == null ? '' : s.name).slice(0, 24) || 'Scene',
+          kind: (typeof s.kind === 'string' && Object.hasOwn(SCENE_KINDS, s.kind)) ? s.kind : 'verse',
+          bars: clamp(Math.round(+s.bars) || 8, 1, MAX_SCENE_BARS),
+          sweep: !!s.sweep, fx: { roll: !!fx.roll, gap: !!fx.gap, stutter: !!fx.stutter }, seq };
+      });
+    const seen = new Set();
+    this.sid = 1;
+    this.scenes.forEach(s => { const n = s.id ? +s.id.slice(1) : 0; if (n >= this.sid) this.sid = n + 1; });
+    this.scenes.forEach(s => { if (!s.id || seen.has(s.id)) s.id = this.newId(); seen.add(s.id); });
+    this.lanes = (Array.isArray(d.lanes) ? d.lanes : []).slice(0, MAX_LANES).filter(L =>
+      L && typeof L.key === 'string' && /^m\d{1,9}\.[A-Za-z0-9_]{1,24}$/.test(L.key) && okVal(L.home)).map(L => {
+        const vals = {};
+        for (const sid of Object.keys(L.vals || {})) if (seen.has(sid) && okVal(L.vals[sid])) vals[sid] = L.vals[sid];
+        return makeLane(L.key, L.home, vals);
+      });
+    this.loopScene = (typeof d.loopScene === 'string' && seen.has(d.loopScene)) ? d.loopScene : null;
+    /* legacy clip arrangement → scenes (every clip boundary starts a new scene) */
+    if (!this.scenes.length && Object.keys(this.tracks).length) {
+      const cuts = new Set([0, this.bars]);
+      for (const id in this.tracks) this.tracks[id].forEach(c => { cuts.add(c.s); cuts.add(Math.min(this.bars, c.s + c.l)); });
+      const b = [...cuts].filter(x => x <= this.bars).sort((x, y) => x - y);
+      for (let i = 0; i + 1 < b.length && this.scenes.length < MAX_SCENES; i++) {
+        const seq = {};
+        for (const id in this.tracks) {
+          const c = this.tracks[id].find(c => b[i] >= c.s && b[i] < c.s + c.l);
+          seq[id] = c ? c.b : -1;
+        }
+        this.scenes.push({ id: this.newId(), name: 'Part ' + (i + 1), kind: 'verse', bars: b[i + 1] - b[i],
+                           sweep: false, fx: { roll: false, gap: false, stutter: false }, seq });
+      }
+      this.tracks = Object.create(null);
+    }
+    this.sel = this.scenes.length ? clamp(this.sel, 0, this.scenes.length - 1) : -1;
     this.touch();
   },
-  touch() { this.rev++; applySongToTransport(); }
+  /** Recompute derived data, bump the revision, re-apply the loop region. */
+  touch() {
+    this.starts = [0];
+    for (const s of this.scenes) this.starts.push(this.starts[this.starts.length - 1] + s.bars);
+    if (this.scenes.length) this.bars = this.total();
+    if (this.loopScene && !this.sceneById(this.loopScene)) this.loopScene = null;
+    this.rev++;
+    songRollersCache = null;
+    applySongToTransport();
+  }
 };
-/** The loop region follows the song panel. */
+/** A lane object (key is "moduleId.paramId"). */
+function makeLane(key, home, vals = {}) {
+  const i = key.indexOf('.');
+  return { key, mid: key.slice(0, i), pid: key.slice(i + 1), home, vals };
+}
+/** The loop region follows the song: whole song, or the scene being edited. */
 function applySongToTransport() {
-  if (song.loop) transport.setLoop(0, song.bars * 4); else transport.setLoop(0, 0);
+  const ls = song.loopScene && song.sceneById(song.loopScene);
+  if (ls) { const k = song.scenes.indexOf(ls); transport.setLoop(song.starts[k] * 4, song.starts[k + 1] * 4); }
+  else if (song.loop) transport.setLoop(0, song.bars * 4);
+  else transport.setLoop(0, 0);
 }
 /** Called by the scheduler: without a loop, song mode stops at the end. */
 function songTick() {
-  if (song.on && !song.loop && transport.playing && transport.beatAt() >= song.bars * 4) {
+  if (song.on && !song.loop && !song.loopScene && transport.playing && transport.beatAt() >= song.bars * 4) {
     transport.stop(true);
     toast('song finished');
   }
@@ -8365,150 +8592,731 @@ function songCommit(label, before) {
 /** Run a song edit (snapshot → change → commit). */
 function songEdit(label, fn) { const before = song.snapshot(); fn(); songCommit(label, before); }
 
-/* ===== BLOCK: ARRANGER PANEL ================================================= */
+
+/* ===== BLOCK: TRACK ROLES ===================================================
+ * What does each SEQ play? Read from the cables, so nothing has to be tagged:
+ * gate → DRUM (by engine) · gate → POLY = chords · pitch into a low OSC = bass.
+ * ========================================================================== */
+const ROLE_ICON = { kick: '◉', snare: '✶', hat: '⋰', perc: '◌', bass: '▂', lead: '♪', chords: '♫', other: '·' };
+const ROLE_COLOR = { kick: '#fb923c', snare: '#fde047', hat: '#38bdf8', perc: '#f472b6', bass: '#a78bfa',
+                     lead: '#22d3ee', chords: '#e879f9', other: '#94a3b8' };
+function seqRole(sq) {
+  const outs = conns.filter(c => c.from.m === sq);
+  const gateTo = outs.filter(c => c.from.j.id === 'gate').map(c => c.to.m);
+  const drum = gateTo.find(m => m.type === 'drum');
+  if (drum) {
+    const e = drum.params.eng.value;
+    return e === 'kick' ? 'kick' : (e === 'snare' || e === 'clap') ? 'snare' : e === 'hat' ? 'hat' : 'perc';
+  }
+  if (gateTo.some(m => m.type === 'poly')) return 'chords';
+  const pitchTo = outs.filter(c => c.from.j.id === 'pitch').map(c => c.to.m);
+  if (!gateTo.length && !pitchTo.length) return 'other';
+  const osc = pitchTo.find(m => m.type === 'osc');
+  const low = sq.params.oct.value < 0 || (osc && osc.params.oct.value < 0);
+  return low ? 'bass' : 'lead';
+}
+/** SEQs that play snare rolls: snares/claps, else the busiest non-kick drum lane. */
+let songRollersCache = null;
+function songRollers() {
+  if (songRollersCache && songRollersCache.n === conns.length + modules.length) return songRollersCache.set;
+  const seqs = modules.filter(m => m.type === 'seq');
+  let ids = seqs.filter(m => seqRole(m) === 'snare').map(m => m.id);
+  if (!ids.length) {
+    const cand = seqs.filter(m => ['hat', 'perc'].includes(seqRole(m)))
+      .sort((a, b) => b.state.banks[b.state.bank].filter(s => s.on).length - a.state.banks[a.state.bank].filter(s => s.on).length);
+    if (cand.length) ids = [cand[0].id];
+  }
+  songRollersCache = { n: conns.length + modules.length, set: new Set(ids) };
+  return songRollersCache.set;
+}
+
+
+/* ===== BLOCK: PLAYBACK — automation + fills =================================
+ * Runs from the live scheduler tick AND the offline render tick, so bounces
+ * contain exactly what you hear. Knob values are applied ~20 ms ahead of the
+ * audio clock; select/toggle params switch at the scene boundary.
+ * ========================================================================== */
+/** Value of lane L inside scene `a` (interpolated in the knob's own curve space). */
+function laneValueAt(L, a, p) {
+  let prev = L.home;
+  for (let j = 0; j < a.k; j++) { const v = L.vals[song.scenes[j].id]; if (v !== undefined) prev = v; }
+  const own = L.vals[a.s.id];
+  if (own === undefined) return prev;
+  if (a.s.sweep && p.k === 'knob' && typeof own === 'number' && typeof prev === 'number')
+    return n2p(p, lerp(p2n(p, prev), p2n(p, own), a.frac));
+  return own;
+}
+function songAutomate(T, time) {
+  if (!song.on || !song.scenes.length || !song.lanes.length || !T.playing) return;
+  const a = song.sceneAt(T.beatAt(time));
+  if (!a) return;
+  const byId = new Map(modules.map(m => [m.id, m]));
+  const tNow = performance.now();
+  for (const L of song.lanes) {
+    const m = byId.get(L.mid), p = m && m.params[L.pid];
+    if (!p) continue;
+    if (!HEADLESS && p._touch && tNow - p._touch < 1200) continue;   // the user is holding this knob
+    let v = laneValueAt(L, a, p);
+    if (p.k === 'knob') { v = +v; if (!isFinite(v)) continue; v = clamp(v, p.min, p.max); }
+    else if (p.k === 'select' && !p.opts.includes(v)) continue;
+    if (p.value === v) continue;
+    p.value = v; p.apply();
+    if (!HEADLESS) p.render();
+  }
+}
+/** Schedule STUTTER fills that start inside [t, ahead]. */
+function songFills(T, t, ahead) {
+  if (!song.on || !song.scenes.length || !T.playing) return;
+  const done = T._fills || (T._fills = new Set());
+  const b0 = T.beatAt(t) - 1e-6, b1 = T.beatAt(ahead);
+  song.scenes.forEach((s, k) => {
+    if (!s.fx.stutter) return;
+    const end = song.starts[k + 1] * 4, fs = end - (s.bars >= 8 ? 2 : 1);
+    if (fs < b0 || fs >= b1) return;
+    const key = s.id + '@' + fs;
+    if (done.has(key)) return;
+    done.add(key);
+    const ts = T.timeAt(fs), te = T.timeAt(end);
+    for (const m of modules) if (m.type === 'stutter' && m.engage) m.engage(ts, te - ts);
+  });
+}
+/** Position readout suffix: the scene under the playhead. */
+function songSceneName(beat) {
+  if (!song.on || !song.scenes.length) return '';
+  const a = song.sceneAt(beat);
+  return a ? a.s.name : '';
+}
+
+
+/* ===== BLOCK: CAPTURE — turning a knob writes into the selected scene ===== */
+let captureHint = false;
+function songCapture(p, before) {
+  if (!song.capture || !songUI.isOpen() || song.sel < 0 || !song.scenes[song.sel] || HEADLESS) return;
+  if (p.m.ctx !== ENGINE) return;
+  const s = song.scenes[song.sel], key = p.m.id + '.' + p.id;
+  const snapBefore = song.snapshot();
+  let L = song.lanes.find(x => x.key === key);
+  if (!L) {
+    if (song.lanes.length >= MAX_LANES) { toast('automation lane limit reached'); return; }
+    L = makeLane(key, before); song.lanes.push(L);
+  }
+  if (L.vals[s.id] === p.value) return;
+  L.vals[s.id] = p.value;
+  song.touch();
+  songUI.flash(key);
+  history.record({
+    label: 'automate ' + p.label, key: 'cap:' + key + ':' + s.id,
+    before: snapBefore, after: song.snapshot(),
+    merge(n) { this.after = n.after; },
+    undo() { song.restore(this.before); }, redo() { song.restore(this.after); }
+  });
+  if (!captureHint) {
+    captureHint = true;
+    toast('● recorded into “' + s.name + '” — knobs you turn now shape this scene');
+  }
+}
+
+
+/* ===== BLOCK: PATTERN VARIATIONS ============================================
+ * Musical mutations of a pattern into a free bank (drop 2, "vary" button).
+ * Seeded, so "make song" gives the same song for the same rack and seed.
+ * ========================================================================== */
+function rng(seed) {                              // mulberry32
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1);
+                 t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+/** Copy bank `from` of SEQ sq into a free bank with role-aware variation. Returns the new bank or `from`. */
+function varyPattern(sq, from, role, R) {
+  const st = sq.state;
+  let to = -1;
+  for (let b = 0; b < SEQ_BANKS; b++) if (b !== from && sq.isDefaultBank(st.banks[b])) { to = b; break; }
+  if (to < 0) return from;
+  const L = Math.round(sq.params.len.value);
+  const src = st.banks[from], dst = st.banks[to];
+  src.forEach((s, i) => Object.assign(dst[i], s));
+  const on = dst.slice(0, L).filter(s => s.on);
+  if (role === 'hat') {                                     // busier, accented, a ratchet or two
+    for (let i = 0; i < L; i++) if (!dst[i].on && R() < .35) Object.assign(dst[i], { on: true, vel: .35 + R() * .3 });
+    for (let k = 0; k < 2; k++) { const s = dst[Math.floor(R() * L)]; if (s.on) s.ratch = 2; }
+  } else if (role === 'snare' || role === 'perc') {        // ghost notes
+    for (let k = 0; k < 3; k++) { const i = Math.floor(R() * L); if (!dst[i].on) Object.assign(dst[i], { on: true, vel: .3 }); }
+  } else if (role === 'kick') {                            // a pickup into the next bar
+    const i = L - 2; if (i > 0 && !dst[i].on) Object.assign(dst[i], { on: true, vel: .8 });
+  } else if (role === 'bass' || role === 'lead' || role === 'chords') {
+    on.forEach(s => {
+      const r = R();
+      if (r < .18) s.note = clamp(s.note + 12, 0, 24);          // octave jump
+      else if (r < .34) s.note = clamp(s.note + (R() < .5 ? 3 : 5), 0, 24);
+      else if (r < .42) s.slide = 1;
+    });
+    if (role !== 'chords') for (let k = 0; k < 2; k++) {       // a couple of extra notes
+      const i = Math.floor(R() * L); if (!dst[i].on) Object.assign(dst[i], { on: true, note: on.length ? on[Math.floor(R() * on.length)].note : 0, vel: .75 });
+    }
+  }
+  sq.refreshUI();
+  return to;
+}
+
+
+/* ===== BLOCK: MAKE SONG — one loop → a full arrangement =====================
+ * Reads the rack (track roles, filters, reverbs, echoes, outputs, stutters) and
+ * writes ordinary, editable scenes + automation lanes. Everything it does can
+ * be changed afterwards; undo removes it in one step.
+ * ========================================================================== */
+const SONG_SIZES = {
+  short:  { intro: 4,  build: 4, drop: 8,  break: 4,  drop2: 8,  outro: 4 },
+  medium: { intro: 8,  build: 8, drop: 16, break: 8,  drop2: 16, outro: 8 },
+  long:   { intro: 16, build: 8, drop: 16, break: 16, drop2: 32, outro: 16 }
+};
+function makeSong(style = 'club', size = 'medium', seed = 1) {
+  const R = rng(seed * 7919 + modules.length);
+  const Z = SONG_SIZES[size] || SONG_SIZES.medium;
+  const seqs = modules.filter(m => m.type === 'seq');
+  const role = new Map(seqs.map(m => [m.id, seqRole(m)]));
+  const is = (id, ...r) => r.includes(role.get(id));
+  const base = new Map(seqs.map(m => [m.id, m.state.bank]));
+  const hasStutter = modules.some(m => m.type === 'stutter');
+  history.run('make song', () => {
+    /* variation patterns for the second drop */
+    const vary = new Map();
+    seqs.forEach(m => {
+      const r = role.get(m.id); if (r === 'other') return;
+      const ed = stateEditor(m);
+      vary.set(m.id, varyPattern(m, base.get(m.id), r, R));
+      ed.commit('vary pattern');
+    });
+    songEdit('make song', () => {
+      song.scenes = []; song.lanes = []; song.sid = 1; song.loopScene = null;
+      const mk = (kind, name, bars, pick, opt = {}) => {
+        const seq = {};
+        seqs.forEach(m => { const b = pick(m.id); seq[m.id] = b == null ? -1 : b; });
+        const s = { id: song.newId(), name, kind, bars, sweep: !!opt.sweep,
+                    fx: { roll: !!opt.roll, gap: !!opt.gap, stutter: !!opt.stutter && hasStutter }, seq };
+        song.scenes.push(s);
+        return s;
+      };
+      const B = id => base.get(id), V = id => vary.get(id);
+      /* "music" carries intros and breaks; a rack with only bass + drums lets the bass do it
+         (its tone is pulled back by the automation below, so it still feels like a break) */
+      const melodic = seqs.some(m => is(m.id, 'lead', 'chords', 'other'));
+      const music = id => is(id, 'lead', 'chords', 'perc', 'other') || (!melodic && is(id, 'bass'));
+      let sc;
+      if (style === 'flow') {
+        sc = {
+          intro:  mk('intro', 'Intro', Z.intro, id => (is(id, 'hat') || music(id)) ? B(id) : null, { sweep: true }),
+          main:   mk('verse', 'Main', Z.drop, B, { sweep: true }),
+          brk:    mk('break', 'Break', Z.break, id => music(id) ? B(id) : null),
+          main2:  mk('drop', 'Main 2', Z.drop2, id => V(id), { sweep: true }),
+          outro:  mk('outro', 'Outro', Z.outro, id => (is(id, 'kick', 'hat') || music(id)) ? B(id) : null, { sweep: true })
+        };
+      } else {
+        sc = {
+          intro:  mk('intro', 'Intro', Z.intro, id => (is(id, 'kick', 'hat', 'perc') || (melodic && music(id))) ? B(id) : null),
+          build:  mk('build', 'Build', Z.build, id => (is(id, 'bass') && melodic) ? null : B(id), { sweep: true, roll: true, gap: true }),
+          drop:   mk('drop', 'Drop', Z.drop, B),
+          brk:    mk('break', 'Break', Z.break, id => (music(id) || is(id, 'hat')) ? B(id) : null),
+          build2: mk('build', 'Build 2', Z.build, id => is(id, 'kick') || (is(id, 'bass') && melodic) ? null : B(id),
+                     { sweep: true, roll: true, gap: true, stutter: true }),
+          drop2:  mk('drop', 'Drop 2', Z.drop2, V),
+          outro:  mk('outro', 'Outro', Z.outro, id => is(id, 'kick', 'hat') || music(id) ? B(id) : null, { sweep: true })
+        };
+      }
+      /* automation: filters breathe, space opens in the break, the end fades */
+      const lane = (m, pid, map) => {
+        const p = m.params[pid]; if (!p || song.lanes.length >= MAX_LANES) return;
+        const L = makeLane(m.id + '.' + pid, p.value);
+        for (const k in map) if (sc[k] && map[k] !== undefined) L.vals[sc[k].id] = map[k];
+        song.lanes.push(L);
+      };
+      const at = (p, d) => n2p(p, clamp(p2n(p, p.value) + d, 0, 1));
+      for (const m of modules) {
+        const P = m.params;
+        if (m.type === 'filter') {
+          const p = P.freq, home = p.value;
+          lane(m, 'freq', style === 'flow'
+            ? { intro: at(p, -.3), main: home, brk: at(p, -.22), main2: home, outro: at(p, -.35) }
+            : { intro: at(p, -.35), build: home, drop: home, brk: at(p, -.25), build2: home, drop2: home, outro: at(p, -.4) });
+        }
+        if (m.type === 'rev') {
+          const p = P.mix, home = p.value;
+          lane(m, 'mix', { intro: Math.min(1, home + .15), main: home, drop: home, brk: Math.min(1, home + .25),
+                           drop2: home, main2: home, outro: Math.min(1, home + .15) });
+        }
+        if (m.type === 'echo') { const home = P.mix.value; lane(m, 'mix', { brk: Math.min(1, home + .2), drop: home, main: home, drop2: home, main2: home }); }
+        /* brightness / energy controls beyond FILTER: darker and thinner outside the drops */
+        const bright = (pid, dIntro, dBreak) => {
+          const p = P[pid]; if (!p) return;
+          const home = p.value;
+          lane(m, pid, style === 'flow'
+            ? { intro: at(p, dIntro), main: home, brk: at(p, dBreak), main2: home, outro: at(p, dIntro) }
+            : { intro: at(p, dIntro), build: home, drop: home, brk: at(p, dBreak), build2: home, drop2: home, outro: at(p, dIntro) });
+        };
+        if (m.type === 'poly')  bright('cut', -.3, -.2);
+        if (m.type === 'growl') bright('morph', -.3, -.22);
+        if (m.type === 'smash') bright('depth', -.35, -.3);
+        if (m.type === 'shift') { const home = P.mix.value; lane(m, 'mix', { brk: Math.min(1, home + .3), drop: home, main: home, drop2: home, main2: home }); }
+        if (m.type === 'stutter' && P.chance.value > 0)
+          lane(m, 'chance', { intro: 0, build: 0, drop: P.chance.value, brk: 0, build2: 0, drop2: P.chance.value, outro: 0, main: P.chance.value, main2: P.chance.value });
+        if (m.type === 'out') {                                    // energy: softer intro + break, fade out
+          const home = P.gain.value;
+          lane(m, 'gain', style === 'flow'
+            ? { intro: home * .85, main: home, brk: home * .78, main2: home, outro: 0 }
+            : { intro: home * .85, build: home, drop: home, brk: home * .78, build2: home, drop2: home, outro: 0 });
+        }
+      }
+      song.on = true; song.loop = false; song.sel = 0;
+    });
+  });
+  songUI.open(true);
+  toast('✨ ' + song.scenes.length + ' scenes · ' + song.total() + ' bars — press ▶ to hear your song');
+}
+
+/* ===== BLOCK: SONG PANEL (scene timeline) ===================================
+ *   header     ▶ from start · song mode · loop · ✨ make song (style, length, 🎲)
+ *              · + scene · ● capture · length/time · zoom
+ *   inspector  the selected scene: name · type · bars · sweep · fills · loop · vary
+ *   timeline   ruler (click = seek) · SCENES strip (click select+jump, drag = move,
+ *              edge = resize, dbl-click = rename) · one row per SEQ (click = on/off,
+ *              drag = paint, letter chip = pattern) · one row per automation lane
+ *              (drag = set the value in that scene, dbl-click = back to "hold")
+ * ========================================================================== */
 const songUI = (() => {
   const root = h('div'); root.id = 'song';
   stage.appendChild(root);
-  /* the panel sits over the stage: keep its events away from pan/zoom/marquee */
   ['pointerdown', 'wheel', 'dblclick'].forEach(ev => root.addEventListener(ev, e => e.stopPropagation()));
-  const ui = { zoom: 48 };                          // pixels per bar
-  const seqs  = () => modules.filter(m => m.type === 'seq');
+  const LABW = 168;
+  const ui = { zoom: 16, autoZoom: true, style: 'club', size: 'medium', seed: 1 };
+  let sig = '', ph = null, scroll = null, content = null, flashKey = null, flashT = 0, playK = -1;
+  const seqs = () => modules.filter(m => m.type === 'seq');
   const title = m => m.el.querySelector('.ttl').textContent;
-  let sig = '', ph = null, scroller = null;
+  const fmtDur = bars => { const s = Math.round(bars * 4 * 60 / transport.bpm); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
-  /* ---- clip geometry helpers ---- */
-  /** Can a clip occupy [s, s+l) on this track (ignoring clip `ignore`)? */
-  function fits(id, s, l, ignore) {
-    if (s < 0 || s + l > song.bars) return false;
-    return !(song.tracks[id] || []).some(c => c !== ignore && s < c.s + c.l && c.s < s + l);
-  }
-  function trimToLength() {                         // after the song gets shorter
-    for (const id in song.tracks) {
-      song.tracks[id] = song.tracks[id].filter(c => c.s < song.bars)
-        .map(c => ({ ...c, l: Math.min(c.l, song.bars - c.s) }));
-      if (!song.tracks[id].length) delete song.tracks[id];
-    }
-  }
-
-  /* ---- header (built once; values refreshed by syncHead) ---- */
+  /* ---------------- header ---------------- */
   const head = h('div', 'sg-head');
-  const mk = (txt, tip, fn) => { const b = h('button', 'tg', txt); b.title = tip; b.style.flex = 'none'; b.onclick = fn; return b; };
-  const bSong = mk('song mode', 'ON: clips control the sequencers (sequencers with clips go silent between them)',
-    () => songEdit('song mode', () => { song.on = !song.on; }));
-  const bLoop = mk('loop', 'loop the song length (off + song mode = stop at the end)',
-    () => songEdit('loop', () => { song.loop = !song.loop; }));
-  const iBars = h('input', 'num'); iBars.title = 'song / loop length in bars';
-  iBars.onchange = () => songEdit('song length', () => { song.bars = clamp(Math.round(+iBars.value) || 8, 1, 256); trimToLength(); });
-  const brush = Array.from({ length: SEQ_BANKS }, (_, i) => {
-    const b = mk('ABCDEFGH'[i], 'brush: pattern ' + 'ABCDEFGH'[i] + ' (used by new clips and clip clicks)',
-      () => { song.brush = i; syncHead(); });
-    b.style.minWidth = '22px'; return b;
+  const btn = (txt, tip, fn, cls = 'tg') => { const b = ht('button', cls, txt); b.title = tip; b.onclick = fn; return b; };
+  const bPlay = btn('▶ from start', 'play the song from the first scene', () => { transport.stop(true); transport.seek(0); transport.play(0); });
+  const bSong = btn('song mode', 'ON: scenes control the rack. OFF: patterns play as a loop', () => songEdit('song mode', () => { song.on = !song.on; }));
+  const bLoop = btn('⟲ loop', 'loop the whole song', () => songEdit('loop', () => { song.loop = !song.loop; }));
+  const selStyle = h('select', 'sel2');
+  [['club', 'club: intro · build · drop · break · build · drop 2 · outro'], ['flow', 'flow: intro · main · break · main 2 · outro']]
+    .forEach(([v, t]) => { const o = h('option'); o.value = v; o.textContent = v; o.title = t; selStyle.appendChild(o); });
+  selStyle.title = 'arrangement style';
+  selStyle.onchange = () => { ui.style = selStyle.value; };
+  const selSize = h('select', 'sel2');
+  [['short', 'short'], ['medium', 'medium'], ['long', 'long']].forEach(([v, t]) => { const o = h('option'); o.value = v; o.textContent = t; selSize.appendChild(o); });
+  selSize.value = 'medium'; selSize.title = 'song length';
+  selSize.onchange = () => { ui.size = selSize.value; };
+  const bMake = btn('✨ make song', 'turn the current loop into a full arrangement (one undo step)', () => {
+    if (song.scenes.length && !confirm('Replace the current arrangement with a new one?')) return;
+    makeSong(ui.style, ui.size, ui.seed); ui.autoZoom = true;
+  }, 'tg sg-make');
+  const bReroll = btn('🎲', 'another variation of the same song', () => { ui.seed++; makeSong(ui.style, ui.size, ui.seed); ui.autoZoom = true; });
+  const bAdd = btn('+ scene', 'add a scene after the selected one (copies it)', () => addScene());
+  const bCap = btn('● capture', 'ON: knobs you turn are recorded into the selected scene', () => { song.capture = !song.capture; syncHead(); });
+  const info = ht('span', 'sg-info', '');
+  const zoom = h('input'); zoom.type = 'range'; zoom.min = 4; zoom.max = 64; zoom.value = ui.zoom; zoom.className = 'sg-zoom';
+  zoom.title = 'zoom';
+  zoom.oninput = () => { ui.zoom = +zoom.value; ui.autoZoom = false; };
+  const bClose = btn('✕', 'close (S)', () => toggle());
+  const spacer = h('span'); spacer.style.flex = '1';
+  head.append(ht('span', 'sg-title', 'SONG'), bPlay, bSong, bLoop, h('span', 'sg-sep'),
+              bMake, selStyle, selSize, bReroll, bAdd, h('span', 'sg-sep'), bCap, spacer, info, zoom, bClose);
+
+  /* ---------------- scene inspector ---------------- */
+  const insp = h('div', 'sg-insp');
+  const iName = h('input', 'sg-name'); iName.maxLength = 24; iName.spellcheck = false;
+  iName.onchange = () => renameScene(song.sel, iName.value);
+  iName.onkeydown = e => { if (e.key === 'Enter') iName.blur(); };
+  const iKind = h('select', 'sel2');
+  SCENE_KIND_LIST.forEach(k => { const o = h('option'); o.value = k; o.textContent = SCENE_KINDS[k].label; iKind.appendChild(o); });
+  iKind.onchange = () => songEdit('scene type', () => { const s = song.scenes[song.sel]; if (s) s.kind = iKind.value; });
+  const bMinus = btn('−', 'shorter (Shift = halve)', e => setBars(song.sel, e.shiftKey ? 'half' : -1));
+  const iBars = ht('span', 'sg-bars', '');
+  const bPlus = btn('+', 'longer (Shift = double)', e => setBars(song.sel, e.shiftKey ? 'double' : 1));
+  const flag = (txt, tip, get, set) => { const b = btn(txt, tip, () => songEdit(tip, () => { const s = song.scenes[song.sel]; if (s) set(s, !get(s)); })); b._get = get; return b; };
+  const bSweep = flag('↗ sweep', 'knob values glide into this scene over its whole length (builds, fades)', s => s.sweep, (s, v) => { s.sweep = v; });
+  const bRoll = flag('▸▸ roll', 'snare roll in the last bar', s => s.fx.roll, (s, v) => { s.fx.roll = v; });
+  const bGap = flag('‖ gap', 'silence on the last beat — the breath before a drop', s => s.fx.gap, (s, v) => { s.fx.gap = v; });
+  const bStut = flag('≋ stutter', 'STUTTER modules engage at the end of the scene', s => s.fx.stutter, (s, v) => { s.fx.stutter = v; });
+  const bLoopS = btn('⟳ loop scene', 'loop just this scene while you work on it', () => {
+    const s = song.scenes[song.sel]; if (!s) return;
+    song.loopScene = song.loopScene === s.id ? null : s.id; song.touch();
+    if (song.loopScene && !transport.playing) { transport.seek(song.starts[song.sel] * 4); }
   });
-  const zoom = h('input'); zoom.type = 'range'; zoom.min = 16; zoom.max = 120; zoom.value = ui.zoom; zoom.style.width = '90px';
-  zoom.oninput = () => { ui.zoom = +zoom.value; };          // tick() re-renders when it changes
-  const bClose = mk('✕', 'close', () => toggle());
-  const tip = h('span', 'lbl', 'click lane = add · drag = move · edge = resize · right-click = delete · click ruler = seek');
-  head.append(h('span', 'lbl', 'song'), bSong, bLoop, h('span', 'lbl', 'bars'), iBars,
-              h('span', 'lbl', 'brush'), ...brush, h('span', 'lbl', 'zoom'), zoom, tip);
-  tip.style.marginLeft = 'auto'; head.appendChild(bClose);
-  const body = h('div', 'sg-body');
-  root.append(head, body);
+  const bVary = btn('✦ vary', 'give this scene fresh variations of its patterns', () => varyScene(song.sel));
+  const bDup = btn('duplicate', 'duplicate this scene', () => addScene(true));
+  const bDel = btn('delete', 'delete this scene', () => delScene(song.sel), 'tg sg-del');
+  insp.append(iName, iKind, ht('span', 'lbl', 'bars'), bMinus, iBars, bPlus, h('span', 'sg-sep'),
+              bSweep, bRoll, bGap, bStut, h('span', 'sg-sep'), bLoopS, bVary, bDup, bDel);
+
+  const body = h('div', 'sg-body2');
+  root.append(head, insp, body);
+
   function syncHead() {
     bSong.classList.toggle('on', song.on);
     bLoop.classList.toggle('on', song.loop);
-    iBars.value = song.bars;
-    brush.forEach((b, i) => b.classList.toggle('on', i === song.brush));
+    bCap.classList.toggle('on', song.capture);
+    bCap.classList.toggle('rec', song.capture && song.sel >= 0);
+    bStut.disabled = !modules.some(m => m.type === 'stutter');
+    const n = song.scenes.length;
+    info.textContent = n ? n + ' scenes · ' + song.total() + ' bars · ' + fmtDur(song.total()) : '';
+    const s = song.scenes[song.sel];
+    insp.style.display = s ? '' : 'none';
     root.classList.toggle('sg-off', !song.on);
+    if (!s) return;
+    if (document.activeElement !== iName) iName.value = s.name;
+    iName.style.borderColor = SCENE_KINDS[s.kind].color;
+    iKind.value = s.kind;
+    iBars.textContent = s.bars;
+    [bSweep, bRoll, bGap, bStut].forEach(b => b.classList.toggle('on', !!b._get(s)));
+    bLoopS.classList.toggle('on', song.loopScene === s.id);
   }
 
-  /* ---- grid (rebuilt whenever the signature changes) ---- */
-  function clipEl(m, c, z) {
-    const d = h('div', 'sg-clip', 'ABCDEFGH'[c.b]);
-    d.style.cssText = `--mc:${m.def.color};left:${c.s * z + 1}px;width:${c.l * z - 2}px`;
-    const rh = h('div', 'rh'); d.appendChild(rh);
+  /* ---------------- scene operations (all undoable) ---------------- */
+  function snapSeq() {                              // every SEQ's current pattern, explicitly
+    const seq = {}; seqs().forEach(m => { seq[m.id] = m.state.bank; }); return seq;
+  }
+  function addScene(dup) {
+    if (song.scenes.length >= MAX_SCENES) return toast('scene limit reached');
+    songEdit(dup ? 'duplicate scene' : 'add scene', () => {
+      const src = song.scenes[song.sel];
+      const s = src
+        ? { ...JSON.parse(JSON.stringify(src)), id: song.newId(), name: dup ? src.name + ' 2' : 'Scene ' + (song.scenes.length + 1) }
+        : { id: song.newId(), name: 'Scene 1', kind: 'verse', bars: 8, sweep: false, fx: { roll: false, gap: false, stutter: false }, seq: snapSeq() };
+      if (src && !dup) { s.kind = 'verse'; s.sweep = false; s.fx = { roll: false, gap: false, stutter: false }; }
+      if (src && dup) song.lanes.forEach(L => { if (L.vals[src.id] !== undefined) L.vals[s.id] = L.vals[src.id]; });
+      const at = src ? song.sel + 1 : song.scenes.length;
+      song.scenes.splice(at, 0, s);
+      song.sel = at;
+      if (song.scenes.length === 1) song.on = true;
+    });
+  }
+  function delScene(k) {
+    const s = song.scenes[k]; if (!s) return;
+    songEdit('delete scene', () => {
+      song.scenes.splice(k, 1);
+      song.lanes.forEach(L => { delete L.vals[s.id]; });
+      song.sel = Math.min(k, song.scenes.length - 1);
+    });
+  }
+  function renameScene(k, name) {
+    const s = song.scenes[k]; if (!s) return;
+    name = String(name).trim().slice(0, 24); if (!name || name === s.name) return syncHead();
+    songEdit('rename scene', () => { s.name = name; });
+  }
+  function setBars(k, d) {
+    const s = song.scenes[k]; if (!s) return;
+    const nb = d === 'half' ? Math.max(1, Math.round(s.bars / 2)) : d === 'double' ? s.bars * 2 : s.bars + d;
+    songEdit('scene length', () => { s.bars = clamp(nb, 1, MAX_SCENE_BARS); });
+  }
+  function moveScene(from, to) {
+    if (from === to || to < 0) return;
+    songEdit('move scene', () => {
+      const [s] = song.scenes.splice(from, 1);
+      song.scenes.splice(to, 0, s);
+      song.sel = to;
+    });
+  }
+  function varyScene(k) {
+    const s = song.scenes[k]; if (!s) return;
+    const R = rng(Date.now() & 0xffff);
+    history.run('vary scene', () => {
+      const nb = {};
+      seqs().forEach(m => {
+        const b = s.seq[m.id] == null ? m.state.bank : s.seq[m.id];
+        if (b < 0) return;
+        const ed = stateEditor(m);
+        nb[m.id] = varyPattern(m, b, seqRole(m), R);
+        ed.commit('vary pattern');
+      });
+      songEdit('vary scene', () => { Object.assign(s.seq, nb); });
+    });
+    toast('✦ “' + s.name + '” got fresh pattern variations');
+  }
+  function selectScene(k, seek = true) {
+    song.sel = k;
+    if (song.loopScene) song.loopScene = song.scenes[k].id;   // the loop follows the selection
+    song.touch();
+    if (seek) transport.seek(song.starts[k] * 4);
+  }
+
+  /* ---------------- timeline ---------------- */
+  function renderGrid() {
+    body.innerHTML = '';
+    const S = song.scenes, list = seqs();
+    if (!S.length) {                               // empty state: one click to a song
+      const e = h('div', 'sg-empty');
+      e.append(ht('div', 'sg-empty-t', 'Turn your loop into a song'),
+               ht('div', 'sg-empty-s', 'Make Song reads your rack — drums, bass, leads, filters, effects — and writes a full ' +
+                  'arrangement with builds, drops, breaks, fills and an ending. Or start with one scene and shape it yourself: ' +
+                  'select a scene, turn knobs, and the scene remembers them.'));
+      const row = h('div', 'sg-empty-b');
+      row.append(btn('✨ Make song', 'build a full arrangement from this loop', () => { makeSong(ui.style, ui.size, ui.seed); ui.autoZoom = true; }, 'tg sg-make big'),
+                 btn('+ first scene from this loop', 'one scene with the patterns playing now', () => addScene()));
+      e.appendChild(row);
+      body.appendChild(e);
+      ph = null; return;
+    }
+    const total = song.total();
+    if (ui.autoZoom) {
+      const w = (body.clientWidth || 900) - LABW - 24;
+      ui.zoom = clamp(Math.floor(w / total), 4, 64); zoom.value = ui.zoom;
+    }
+    const z = ui.zoom, W = total * z;
+    scroll = h('div', 'sg-scroll2');
+    content = h('div', 'sg-content'); content.style.width = (LABW + W + 12) + 'px';
+    const row = (cls, label, lcls) => {
+      const r = h('div', 'sg-r ' + cls), l = h('div', 'sg-lab ' + (lcls || ''));
+      if (label != null) l.append(...(Array.isArray(label) ? label : [ht('span', null, label)]));
+      const a = h('div', 'sg-area'); a.style.width = W + 'px';
+      r.append(l, a); content.appendChild(r); return { r, l, a };
+    };
+    /* ruler */
+    const ru = row('sg-ruler2', '');
+    const every = z >= 24 ? 1 : z >= 12 ? 2 : z >= 6 ? 4 : 8;
+    for (let b = 0; b < total; b += every) { const s = ht('span', null, String(b + 1)); s.style.left = b * z + 'px'; ru.a.appendChild(s); }
+    ru.a.addEventListener('pointerdown', e => {
+      const r = ru.a.getBoundingClientRect();
+      transport.seek(clamp(Math.floor((e.clientX - r.left) / z), 0, total - 1) * 4);
+    });
+    /* scenes strip */
+    const sr = row('sg-scenes', 'SCENES', 'sg-hdr');
+    S.forEach((s, k) => sr.a.appendChild(sceneEl(s, k, z)));
+    indEl = h('div', 'sg-ins'); sr.a.appendChild(indEl);              // drop indicator for reordering
+    /* track rows */
+    if (list.length) row('sg-div', 'PATTERNS', 'sg-hdr');
+    list.forEach(m => {
+      const role = seqRole(m);
+      const lab = [ht('span', 'sg-role', ROLE_ICON[role]), ht('span', 'sg-tn', title(m)), ht('span', 'sg-rn', role)];
+      const tr = row('sg-track', lab);
+      const col = ROLE_COLOR[role];
+      tr.l.style.setProperty('--mc', col);
+      S.forEach((s, k) => tr.a.appendChild(cellEl(m, s, k, z, col)));
+    });
+    /* automation rows */
+    const lanes = song.lanes.filter(L => { const m = modById(L.mid); return m && m.params[L.pid]; });
+    row('sg-div', 'AUTOMATION', 'sg-hdr');
+    lanes.forEach(L => laneRow(L, row, z, W));
+    const hint = row('sg-hint', '');
+    hint.a.appendChild(ht('span', 'sg-hinttxt', song.capture
+      ? '● capture is on — select a scene and turn any knob to automate it'
+      : 'turn on ● capture, select a scene and turn any knob to automate it'));
+    ph = h('div', 'sg-ph2'); content.appendChild(ph);
+    scroll.appendChild(content); body.appendChild(scroll);
+  }
+
+  function sceneEl(s, k, z) {
+    const K = SCENE_KINDS[s.kind], d = h('div', 'sg-scene' + (k === song.sel ? ' sel' : ''));
+    d.style.cssText = `left:${song.starts[k] * z + 1}px;width:${s.bars * z - 2}px;--kc:${K.color}`;
+    const nm = ht('div', 'sg-sn', s.name);
+    const icons = (s.sweep ? '↗' : '') + (s.fx.roll ? ' ▸▸' : '') + (s.fx.gap ? ' ‖' : '') + (s.fx.stutter ? ' ≋' : '');
+    const meta = ht('div', 'sg-sm', s.bars + (s.bars * z > 60 ? ' bars' : '') + (icons ? ' · ' + icons : ''));
+    const rh = h('div', 'sg-rh');
+    d.append(nm, meta, rh);
+    d.title = s.name + ' — ' + s.bars + ' bars. Click: select & jump · drag: move · edge: length · double-click: rename';
+    if (song.loopScene === s.id) d.classList.add('looped');
     d.addEventListener('pointerdown', e => {
-      e.stopPropagation();
-      if (e.button === 2) { songEdit('delete clip', () => { song.tracks[m.id] = song.tracks[m.id].filter(x => x !== c); }); return; }
       if (e.button !== 0) return;
-      const mode = e.target === rh ? 'size' : 'move';
-      const before = song.snapshot(), x0 = e.clientX, s0 = c.s, l0 = c.l;
-      let moved = false;
+      e.stopPropagation();
+      const x0 = e.clientX, bars0 = s.bars, resize = e.target === rh;
+      let moved = false, target = k;
       d.setPointerCapture(e.pointerId);
       const mv = ev => {
-        const dx = Math.round((ev.clientX - x0) / z);
-        if (dx) moved = true;
-        if (mode === 'move') { const ns = clamp(s0 + dx, 0, song.bars - c.l); if (fits(m.id, ns, c.l, c)) c.s = ns; }
-        else                 { const nl = clamp(l0 + dx, 1, song.bars - c.s); if (fits(m.id, c.s, nl, c)) c.l = nl; }
-        d.style.left = c.s * z + 1 + 'px'; d.style.width = c.l * z - 2 + 'px';
+        const dx = ev.clientX - x0;
+        if (!moved && Math.abs(dx) < 5) return;
+        moved = true;
+        if (resize) {
+          const nb = clamp(Math.round(bars0 + dx / z), 1, MAX_SCENE_BARS);
+          d.style.width = nb * z - 2 + 'px'; meta.textContent = nb + ' bars';
+          d._nb = nb;
+        } else {
+          d.classList.add('drag'); d.style.transform = `translateX(${dx}px)`;
+          const cx = song.starts[k] * z + s.bars * z / 2 + dx;             // reorder by centre position
+          target = 0;
+          for (let j = 0; j < song.scenes.length; j++) if (j !== k && cx > song.starts[j] * z + song.scenes[j].bars * z / 2) target++;
+          indEl.style.display = 'block';
+          const gapAt = target >= song.scenes.length - 1 ? song.total() : song.starts[target + (target > k ? 1 : 0)];
+          indEl.style.left = gapAt * z - 1 + 'px';
+        }
       };
       const up = () => {
         d.removeEventListener('pointermove', mv); d.removeEventListener('pointerup', up);
-        if (!moved && mode === 'move') c.b = song.brush;          // plain click = paint with the brush
-        songCommit('edit clip', before);
+        indEl.style.display = 'none';
+        if (!moved) return selectScene(k);
+        if (resize && d._nb) songEdit('scene length', () => { s.bars = d._nb; });
+        else if (!resize) { d.style.transform = ''; moveScene(k, target); }
       };
       d.addEventListener('pointermove', mv); d.addEventListener('pointerup', up);
     });
+    d.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      nm.contentEditable = 'true'; nm.focus();
+      document.getSelection().selectAllChildren(nm);
+      const done = () => { nm.contentEditable = 'false'; renameScene(k, nm.textContent); };
+      nm.addEventListener('blur', done, { once: true });
+      nm.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') { ev.preventDefault(); nm.blur(); } });
+    });
     return d;
   }
-  function renderGrid() {
-    body.innerHTML = '';
-    const z = ui.zoom, list = seqs();
-    if (!list.length) { body.appendChild(h('div', 'lempty', 'add a SEQ module to arrange patterns')); ph = null; return; }
-    const labels = h('div', 'sg-labels'); labels.appendChild(h('div', 'sp'));
-    scroller = h('div', 'sg-scroll');
-    const inner = h('div', 'sg-inner'); inner.style.width = song.bars * z + 'px';
-    const ruler = h('div', 'sg-ruler');
-    const every = z >= 40 ? 1 : (z >= 24 ? 2 : 4);
-    for (let b = 0; b < song.bars; b += every) {
-      const s = h('span', null, String(b + 1)); s.style.left = b * z + 'px'; ruler.appendChild(s);
-    }
-    ruler.addEventListener('pointerdown', e => {
-      const r = inner.getBoundingClientRect();
-      transport.seek(clamp(Math.floor((e.clientX - r.left) / z), 0, song.bars - 1) * 4);
-    });
-    inner.appendChild(ruler);
-    list.forEach(m => {
-      const lab = ht('div', null, title(m)); lab.style.color = m.def.color; labels.appendChild(lab);
-      const row = h('div', 'sg-row');
-      row.style.backgroundImage =
-        `repeating-linear-gradient(90deg,rgba(255,255,255,.07) 0 1px,transparent 1px ${z}px)`;
-      (song.tracks[m.id] || []).forEach(c => row.appendChild(clipEl(m, c, z)));
-      row.addEventListener('pointerdown', e => {                 // empty lane: add a 1-bar clip
-        if (e.target !== row || e.button !== 0) return;
-        const r = row.getBoundingClientRect(), bar = Math.floor((e.clientX - r.left) / z);
-        songEdit('add clip', () => {
-          if (fits(m.id, bar, 1)) (song.tracks[m.id] = song.tracks[m.id] || []).push({ s: bar, l: 1, b: song.brush });
-        });
+  let indEl = null;
+
+  /* a pattern cell: on/off + letter chip + miniature of the pattern */
+  let paint = null;
+  function cellEl(m, s, k, z, col) {
+    const v = s.seq[m.id], live = v == null, on = live || v >= 0;
+    const bank = live ? m.state.bank : v;
+    const c = h('div', 'sg-cell' + (on ? ' on' : '') + (live ? ' live' : ''));
+    c.style.cssText = `left:${song.starts[k] * z + 2}px;width:${s.bars * z - 4}px;--mc:${col}`;
+    if (on) {
+      const chip = ht('span', 'sg-chip', 'ABCDEFGH'[bank]);
+      chip.title = 'pattern ' + 'ABCDEFGH'[bank] + ' — click: next pattern · Shift: previous';
+      chip.addEventListener('pointerdown', e => {
+        e.stopPropagation();
+        const dir = e.shiftKey ? -1 : 1;
+        const used = [...Array(SEQ_BANKS).keys()].filter(b => !m.isDefaultBank(m.state.banks[b]));
+        const firstEmpty = [...Array(SEQ_BANKS).keys()].find(b => m.isDefaultBank(m.state.banks[b]));
+        const cycle = [...used, ...(firstEmpty != null ? [firstEmpty] : [])].sort((a, b) => a - b);
+        const i = cycle.indexOf(bank), nb = cycle[(i + dir + cycle.length) % cycle.length];
+        songEdit('scene pattern', () => { s.seq[m.id] = nb; });
+        if (!transport.playing) m.setBank(nb);                          // show it on the SEQ to edit
       });
-      inner.appendChild(row);
+      c.appendChild(chip);
+      if (s.bars * z > 34) {
+        const cv = h('canvas', 'sg-mini'), w = Math.max(8, s.bars * z - 34), hh = 16, r = devicePixelRatio;
+        cv.width = w * r; cv.height = hh * r; cv.style.width = w + 'px'; cv.style.height = hh + 'px';
+        const g = cv.getContext('2d'); g.scale(r, r);
+        const steps = m.state.banks[bank], L = Math.round(m.params.len.value), sw = w / L;
+        g.fillStyle = col;
+        for (let i = 0; i < L; i++) if (steps[i].on) {
+          const ht_ = 3 + steps[i].note / 24 * 11;
+          g.globalAlpha = .45 + steps[i].vel * .55;
+          g.fillRect(i * sw + .5, hh - ht_, Math.max(1, sw - 1), ht_);
+        }
+        c.appendChild(cv);
+      }
+    }
+    c.title = (on ? 'playing ' + (live ? 'its selected pattern' : 'pattern ' + 'ABCDEFGH'[bank]) : 'silent') + ' in “' + s.name + '” — click: on/off · drag: paint';
+    c.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      const turnOn = !on;
+      paint = { m, turnOn, done: new Set([s.id]), before: song.snapshot() };
+      apply(s);
+      function apply(sc) {
+        if (turnOn) { const prev = [...song.scenes].reverse().find(x => x.seq[m.id] >= 0); sc.seq[m.id] = prev ? prev.seq[m.id] : m.state.bank; }
+        else sc.seq[m.id] = -1;
+      }
+      const mv = ev => {
+        const el = document.elementFromPoint(ev.clientX, ev.clientY), cell = el && el.closest('.sg-cell');
+        if (!cell || !cell._s || cell._m !== m || paint.done.has(cell._s.id)) return;
+        paint.done.add(cell._s.id); apply(cell._s);
+        cell.classList.toggle('on', turnOn); cell.classList.remove('live');
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+        songCommit('scene parts', paint.before); paint = null;
+      };
+      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
-    ph = h('div', 'sg-ph'); inner.appendChild(ph);
-    scroller.appendChild(inner);
-    body.append(labels, scroller);
+    c._s = s; c._m = m;
+    return c;
   }
 
-  /* ---- public API ---- */
+  /* an automation lane: one canvas, drawn per scene */
+  function laneRow(L, row, z, W) {
+    const m = modById(L.mid), p = m.params[L.pid];
+    const xb = ht('button', 'sg-x', '✕'); xb.title = 'remove this automation';
+    xb.onclick = () => songEdit('remove automation', () => { song.lanes = song.lanes.filter(x => x !== L); });
+    const val = ht('span', 'sg-lv', '');
+    const r = row('sg-lane' + (flashKey === L.key && performance.now() - flashT < 900 ? ' flash' : ''),
+                  [ht('span', 'sg-tn', title(m)), ht('span', 'sg-pn', p.label), val, xb]);
+    r.l.style.setProperty('--mc', m.def.color);
+    const H = 34, cv = h('canvas', 'sg-lc'), rr = devicePixelRatio;
+    cv.width = Math.max(1, W * rr); cv.height = H * rr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    r.a.appendChild(cv);
+    const g = cv.getContext('2d'); g.scale(rr, rr);
+    const norm = v => p.k === 'knob' ? p2n(p, +v) : p.k === 'toggle' ? (v ? 1 : 0) : Math.max(0, p.opts.indexOf(v)) / Math.max(1, p.opts.length - 1);
+    const Y = n => H - 4 - n * (H - 8);
+    const draw = () => {
+      g.clearRect(0, 0, W, H);
+      let prev = L.home;
+      song.scenes.forEach((s, k) => {
+        const x0 = song.starts[k] * z, x1 = song.starts[k + 1] * z, own = L.vals[s.id];
+        const a = norm(prev), b = own === undefined ? a : norm(own);
+        const sweep = s.sweep && own !== undefined && p.k === 'knob';
+        if (k === song.sel) { g.fillStyle = 'rgba(255,255,255,.05)'; g.fillRect(x0, 0, x1 - x0, H); }
+        g.beginPath(); g.moveTo(x0, Y(sweep ? a : b)); g.lineTo(x1, Y(b)); g.lineTo(x1, H); g.lineTo(x0, H); g.closePath();
+        g.fillStyle = FXV.rgba(m.def.color, own === undefined ? .06 : .18); g.fill();
+        g.beginPath(); g.moveTo(x0, Y(sweep ? a : b)); g.lineTo(x1, Y(b));
+        g.setLineDash(own === undefined ? [3, 3] : []);
+        g.strokeStyle = own === undefined ? FXV.rgba(m.def.color, .45) : m.def.color; g.lineWidth = own === undefined ? 1 : 2; g.stroke();
+        g.setLineDash([]);
+        if (own !== undefined) { g.fillStyle = '#fff'; g.beginPath(); g.arc(x1 - Math.min(6, (x1 - x0) / 2), Y(b), 2.5, 0, 7); g.fill(); }
+        g.fillStyle = 'rgba(255,255,255,.06)'; g.fillRect(x1 - 1, 0, 1, H);
+        if (own !== undefined) prev = own;
+      });
+      const s = song.scenes[song.sel];
+      if (s) {                                                         // value in the selected scene
+        let v = L.home; for (let j = 0; j <= song.sel; j++) { const o = L.vals[song.scenes[j].id]; if (o !== undefined) v = o; }
+        val.textContent = p.k === 'knob' ? fmtv(p, +v) : String(v);
+      }
+    };
+    draw();
+    const sceneAtX = x => { const bar = x / z; for (let k = 0; k < song.scenes.length; k++) if (bar < song.starts[k + 1]) return k; return song.scenes.length - 1; };
+    cv.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      const rc = cv.getBoundingClientRect(), k = sceneAtX(e.clientX - rc.left), s = song.scenes[k];
+      const before = song.snapshot();
+      cv.setPointerCapture(e.pointerId);
+      const set = ev => {
+        const n = clamp(1 - (ev.clientY - rc.top - 4) / (H - 8), 0, 1);
+        L.vals[s.id] = p.k === 'knob' ? n2p(p, n) : p.k === 'toggle' ? (n > .5 ? 1 : 0) : p.opts[Math.round(n * (p.opts.length - 1))];
+        if (song.sel !== k) { song.sel = k; syncHead(); }
+        draw();
+      };
+      set(e);
+      const up = () => { cv.removeEventListener('pointermove', set); cv.removeEventListener('pointerup', up); songCommit('automation', before); };
+      cv.addEventListener('pointermove', set); cv.addEventListener('pointerup', up);
+    });
+    cv.addEventListener('dblclick', e => {
+      const rc = cv.getBoundingClientRect(), s = song.scenes[sceneAtX(e.clientX - rc.left)];
+      songEdit('clear automation', () => { delete L.vals[s.id]; });
+    });
+  }
+
+  /* ---------------- public API ---------------- */
   function toggle() {
     const open = root.classList.toggle('open');
     $('#songbtn').classList.toggle('on', open);
-    sig = '';                                                   // force a redraw
+    sig = '';
   }
-  /** Called every animation frame: re-render on change, move the playhead. */
+  function open(force) { if (!root.classList.contains('open')) toggle(); if (force) sig = ''; }
+  function close() { if (root.classList.contains('open')) toggle(); }
+  function isOpen() { return root.classList.contains('open'); }
+  function flash(key) { flashKey = key; flashT = performance.now(); sig = ''; }
+  /** Every animation frame: re-render on change, move the playhead, light the playing scene. */
   function tick() {
     if (!root.classList.contains('open')) return;
-    const s = song.rev + '|' + ui.zoom + '|' + seqs().map(m => m.id + title(m)).join(',');
-    if (s !== sig) { sig = s; syncHead(); renderGrid(); }
-    if (ph) {
-      const x = transport.beatAt() / 4 * ui.zoom;
-      ph.style.left = x + 'px';
-      if (transport.playing && scroller) {                      // keep the playhead in view
-        const l = scroller.scrollLeft, w = scroller.clientWidth;
-        if (x < l || x > l + w - 30) scroller.scrollLeft = Math.max(0, x - 40);
+    const sg = song.rev + '|' + ui.zoom + '|' + song.sel + '|' + song.capture + '|' + modules.length + '|' +
+               seqs().map(m => m.id + m.state.bank + title(m)).join(',') + '|' + (body.clientWidth >> 5);
+    if (sg !== sig) { sig = sg; syncHead(); renderGrid(); }
+    if (ph && song.scenes.length) {
+      const beat = transport.beatAt(), x = beat / 4 * ui.zoom;
+      ph.style.left = (LABW + x) + 'px';
+      if (transport.playing && scroll) {
+        const l = scroll.scrollLeft, w = scroll.clientWidth - LABW;
+        if (x < l || x > l + w - 40) scroll.scrollLeft = Math.max(0, x - 60);
+      }
+      const a = transport.playing ? song.sceneAt(beat) : null, k = a ? a.k : -1;
+      if (k !== playK) {
+        playK = k;
+        content.querySelectorAll('.sg-scene').forEach((el, i) => el.classList.toggle('play', i === k));
       }
     }
   }
-  function close() { if (root.classList.contains('open')) toggle(); }
-  return { toggle, tick, close };
+  return { toggle, open, close, isOpen, tick, flash };
 })();
 
 
@@ -8582,7 +9390,7 @@ async function renderOffline({ bars, tail, stems, onProgress }) {
     eng.transport.play(0, 0);                                      // start at exactly t = 0 (no lead-in)
     const STEP = 1024;                                             // frames between control updates
     const nSteps = Math.floor(off.length / STEP);
-    const tick = t => { pumpControl(); pumpSched(t, t + LOOK); };
+    const tick = t => { songAutomate(eng.transport, t + .02); pumpControl(); pumpSched(t, t + LOOK); songFills(eng.transport, t, t + LOOK); };
     tick(0);
     for (let k = 1; k < nSteps; k++) {
       const t = k * STEP / sr;
@@ -8662,7 +9470,11 @@ const exportUI = (() => {
   const ov = $('#expov');
   let busy = false;
   const prog = (f, txt) => { $('#exprog i').style.width = (f * 100) + '%'; $('#extxt').textContent = txt; };
-  function open() { $('#exbars').value = song.bars; prog(0, ''); ov.classList.remove('hide'); }
+  function open() {
+    $('#exbars').value = song.bars;
+    if (song.on && song.scenes.length && +$('#extail').value < 4) $('#extail').value = 4;   // let the ending ring out
+    prog(0, ''); ov.classList.remove('hide');
+  }
   function close() { if (!busy) ov.classList.add('hide'); }
   async function go() {
     if (busy) return;
@@ -8737,7 +9549,7 @@ async function measureDsp(secs = 2) {
       eng.transport.play(0, 0);
       const STEP = 4096, n = Math.floor(off.length / STEP);
       let hook = 0;
-      const tick = t => { pumpControl(); pumpSched(t, t + LOOK); };
+      const tick = t => { songAutomate(eng.transport, t + .02); pumpControl(); pumpSched(t, t + LOOK); songFills(eng.transport, t, t + LOOK); };
       tick(0);
       for (let k = 1; k < n; k++) {
         const t = k * STEP / sr;

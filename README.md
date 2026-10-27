@@ -13,7 +13,9 @@ is compressed into the link's `#hash`, so no server is ever involved.
 > issues. All 30 are fixed in this revision and were re-verified in headless
 > Chromium. See [§ 14 Changelog & known issues](#14-changelog--known-issues).
 > **New:** the [FX LAB](#516-fx-lab-modern-bass-music-effects) modules SMASH,
-> GROWL, SHIFT, STUTTER and PUMP, plus the **☢ Filth Lab** preset.
+> GROWL, SHIFT, STUTTER and PUMP, plus the **☢ Filth Lab** preset, and a scene-based
+> [song arranger](#7-song-arranger-scenes) with **✨ Make song** (one loop → a full
+> arrangement).
 
 ---
 
@@ -25,7 +27,7 @@ is compressed into the link's `#hash`, so no server is ever involved.
 4. [Mouse & keyboard reference](#4-mouse--keyboard-reference)
 5. [Module reference](#5-module-reference)
 6. [The sequencer in depth](#6-the-sequencer-in-depth)
-7. [Song arranger](#7-song-arranger)
+7. [Song arranger: scenes](#7-song-arranger-scenes)
 8. [Playing live: QWERTY piano, Web MIDI, MIDI learn](#8-playing-live-qwerty-piano-web-midi-midi-learn)
 9. [Saving, library, files & share links](#9-saving-library-files--share-links)
 10. [Recording & bouncing audio](#10-recording--bouncing-audio)
@@ -881,26 +883,94 @@ jumps back to step 0.
 
 ---
 
-## 7. Song arranger
+## 7. Song arranger: scenes
 
-Open it with **song** or **S**. It shows one lane per SEQ module and a bar ruler.
+Open the arranger with **song** or **S**. It turns a loop into a full track, with
+sections, parts entering and leaving, sweeps, fills and an ending. There are no
+per-bar clips to paint.
 
-| Control | Function |
+### The idea in one minute
+
+* **A song is a row of scenes.** A scene is a section ("Intro", "Build", "Drop"…) with
+  a length in bars.
+* **Each scene says which parts play.** In the matrix (one row per SEQ, one column per
+  scene), a cell is either *on* (with a pattern letter A–H) or *off* (silent).
+* **Each scene remembers knob settings.** Select a scene and turn any knob on the rack
+  (with **● capture** on). The scene remembers the value and an *automation lane*
+  appears. Scenes without their own value simply keep the previous one.
+* **Sweep or cut.** A scene with **↗ sweep** glides every automated knob from the
+  previous scene's value to its own, across its whole length (builds, fades).
+  Otherwise values change at the scene's first beat.
+* **Fills** at the end of a scene:
+  * **▸▸ roll:** the snare/clap lane plays a roll (8ths → 16ths → 32nds) in the last
+    bar.
+  * **‖ gap:** one beat of silence before the next scene, the breath before a drop.
+  * **≋ stutter:** every STUTTER module engages for the last beat or two.
+
+### ✨ Make song: one loop → a whole track
+
+Press **✨ make song** (in the empty arranger, or in its header). It reads your rack
+and writes a complete, editable arrangement in one undoable step.
+
+* **Track roles** are read from the cables, so nothing needs tagging:
+  * a SEQ gating a DRUM is *kick*, *snare* (snare/clap), *hat* or *perc*;
+  * a SEQ gating a POLY is *chords*;
+  * a SEQ feeding a low OSC is *bass*, otherwise *lead*.
+* **Structure:**
+
+  | Style | Sections |
+  |---|---|
+  | *club* | Intro → Build (sweep, roll, gap) → Drop → Break → Build 2 (no kick; roll, gap, stutter) → **Drop 2** (with variation patterns) → Outro (fade) |
+  | *flow* | Intro → Main → Break → Main 2 (variations) → Outro; no fills, gentle sweeps |
+
+  Length: *short* ≈ 36 bars, *medium* ≈ 72, *long* ≈ 120.
+* **Variations:** Drop 2 gets new patterns written into free pattern slots.
+  * Hats get busier with ratchets.
+  * Snares get ghost notes.
+  * The kick gets a pickup.
+  * Bass and leads get octave jumps, neighbour notes and slides.
+* **Automation** is written for whatever the rack has:
+  * FILTER cutoffs, plus POLY cutoff, GROWL vowel and SMASH density as "brightness":
+    darker intro and break, sweeping up through the builds;
+  * REVERB/ECHO/SHIFT mix: wider and wetter in the break;
+  * STUTTER chance: glitches only in the drops;
+  * OUT levels: softer intro and break, fade-out in the outro.
+* **Adapts to sparse racks:** if there's no melodic part, the bass carries the break
+  and enters in the build, while the intro is drums only.
+* **🎲** makes another variation of the same song; style and length change the
+  structure.
+
+### The panel
+
+| Area | What you can do |
 |---|---|
-| **song mode** | When ON, clips decide which pattern each SEQ plays. A SEQ that has clips is **silent in the gaps between them**. SEQs with no clips play normally. |
-| **loop** | Wrap the transport at the song length. This is independent of song mode. If song mode is on and loop is off, playback stops at the end ("song finished"). |
-| **bars** | Song length, 1–256. Shortening it trims clips. |
-| **brush A–H** | Pattern used for new clips and for click-to-paint. |
-| **zoom** | 16–120 px per bar. |
-| Click an empty lane | Add a 1-bar clip with the brush pattern. |
-| Drag a clip | Move it (no overlaps allowed). |
-| Drag a clip's right edge | Resize it. |
-| Click a clip | Repaint it with the brush pattern. |
-| Right-click a clip | Delete it. |
-| Click the ruler | Seek to that bar. |
+| **Header** | ▶ from start · **song mode** (scenes control the rack; off = plain loop) · **⟲ loop** (whole song) · ✨ make song + style + length + 🎲 · **+ scene** (copies the selected scene) · **● capture** · length and duration · zoom |
+| **Scene inspector** | Appears for the selected scene: name · type (Intro, Verse, Build, Drop, Break, Outro; sets the colour) · bars − / + (Shift = halve/double) · ↗ sweep · ▸▸ roll · ‖ gap · ≋ stutter · **⟳ loop scene** (loop just this section while you work on it; the loop follows your selection) · ✦ vary (fresh pattern variations for this scene) · duplicate · delete |
+| **Ruler** | Click to jump there. |
+| **Scenes strip** | **Click** = select and jump. **Drag** = reorder (a white marker shows where it will land). **Drag the right edge** = length. **Double-click** = rename. The playing scene glows along its bottom edge. |
+| **Pattern rows** | One per SEQ, coloured by role, with its role icon. **Click a cell** = part on/off in that scene. **Drag across cells** = paint on/off. **Click the letter chip** = next pattern (Shift = previous); the SEQ shows that pattern so you can edit it. Each cell shows a **miniature of the pattern**. Dashed cells = "not controlled" (the SEQ plays its own selected pattern). |
+| **Automation lanes** | One per automated knob. A solid line is a value set in that scene; a dashed line is held from before; a slope means sweep. **Drag** in a scene to set its value. **Double-click** = back to "hold". **✕** removes the lane. The label shows the value in the selected scene. |
 
-When song mode drives a SEQ, its pattern view follows the song. All arranger edits are
-undoable, and the song is saved with the patch and included in share links.
+Playback and rendering:
+
+* Pattern changes happen at the exact step. Knob automation is applied ~20 ms ahead
+  of the audio clock.
+* Live playback and **bounce** produce the same song. Bounce defaults to the full song
+  length with a 4 s tail, so reverbs and echoes ring out.
+* Song mode without loop stops at the end.
+* The toolbar position readout shows the current scene (`017.1.1 · Drop`).
+* While you hold an automated knob during playback, automation yields to you (and
+  records your move if capture is on).
+
+Everything is undoable:
+
+* Make song: one step.
+* Each capture gesture: one step.
+* Each drag, paint or click: one step.
+
+Songs are saved with patches and included in share links (a 72-bar song adds about
+1 KB). Arrangements from the old per-bar clip arranger load as scenes automatically:
+every clip boundary starts a new scene.
 
 ---
 
@@ -1456,11 +1526,26 @@ Sequencer helpers:
 | `setMidi(p, ch, cc)` | Attach a MIDI CC mapping. |
 | `noteInput.*` | `listeners, on, off, panic, record, setQwerty, releaseQwerty, handleKeyDown, handleKeyUp, enableMidi, midiMsg, setLearn, armLearn, clearLearnTarget, cc`. `record(note, vel)` writes into every record-armed SEQ (used by QWERTY, MIDI and KEYS' on-screen keys). |
 | `anyDialogOpen()` / `closeAllPanels()` | Keyboard helpers: shortcuts are inert while a dialog is open; Esc closes everything. |
-| `song.*` | `bankFor(id, beat)`, `snapshot(prune)`, `restore(d)` (validated), `touch()`. |
-| `applySongToTransport()` | Sync the loop region. |
+| `song` (model) | `{on, loop, bars, scenes[], lanes[], tracks (legacy), loopScene, sel, capture, starts[]}`. Scene = `{id, name, kind, bars, sweep, fx:{roll, gap, stutter}, seq:{seqId: bank \| -1}}`. Lane = `{key:'mId.paramId', mid, pid, home, vals:{sceneId: value}}`. |
+| `song.sceneAt(beat)` | `{k, s, b0, len, frac}` for the scene under a beat (binary search over `starts`). |
+| `song.bankFor(id, beat)` | Pattern for a SEQ at a beat: scene map, `-1` during a **gap** (last beat), `null` = not controlled. Falls back to legacy clips when there are no scenes. |
+| `song.rollFor(id, beat)` | Synthetic roll step (`{on, ratch, vel}`) for roller SEQs in the last bar of a **roll** scene. |
+| `song.snapshot(prune)` / `song.restore(d)` / `song.touch()` | Copy · validated load (hostile-safe; converts legacy clips to scenes) · recompute starts/total, bump `rev`, re-apply loop. |
+| `makeLane(key, home, vals)` | Lane constructor. |
+| `applySongToTransport()` | Loop region: the looped scene, else the whole song (loop on), else none. |
 | `songTick()` | Stop at the song end (song mode, no loop). |
 | `songCommit(label, before)` / `songEdit(label, fn)` | Undoable song edits. |
-| `songUI.toggle()` / `songUI.close()` / `songUI.tick()` | Arranger panel (internal: `fits`, `trimToLength`, `syncHead`, `clipEl`, `renderGrid`). |
+| `seqRole(seq)` / `ROLE_ICON` / `ROLE_COLOR` | Role of a SEQ from its cables: kick, snare, hat, perc, bass, lead, chords, other. |
+| `songRollers()` | SEQ ids that play rolls (snare/clap, else the busiest hat/perc), cached. |
+| `laneValueAt(L, a, p)` | Lane value inside a scene: own value, held value, or a sweep interpolated in the knob's curve space. |
+| `songAutomate(T, time)` | Apply every lane at `time` (live scheduler and offline render). Yields to a knob the user is holding. |
+| `songFills(T, t, ahead)` | Schedule STUTTER fills (`m.engage(t, dur)`) whose start falls in the look-ahead window; de-duplicated per pass (`T._fills`, reset on play/seek/loop). |
+| `songSceneName(beat)` | Scene name for the toolbar position readout. |
+| `songCapture(p, before)` | Called from `P.setValue` (user changes only): writes the value into the selected scene, creating the lane (home = value before the change); merged into one undo step per gesture. |
+| `rng(seed)` | mulberry32 PRNG (deterministic variations). |
+| `varyPattern(seq, from, role, R)` | Copy a pattern into a free bank with role-aware variation; returns the new bank. |
+| `makeSong(style, size, seed)` | Generate scenes + lanes + variation patterns from the rack, as one undo step. `SONG_SIZES` holds the section lengths. |
+| `songUI.toggle/open/close/isOpen/tick/flash` | Arranger panel (internal: `syncHead`, `addScene`, `delScene`, `renameScene`, `setBars`, `moveScene`, `varyScene`, `selectScene`, `renderGrid`, `sceneEl`, `cellEl`, `laneRow`). |
 | `withHeadlessRack(engine, fn)` | Swap in a hidden rack bound to another engine, then restore. |
 | `renderOffline({bars, tail, stems, onProgress})` | Offline bounce → `{files:[{name, L, R}], sampleRate, seconds, capped}`. |
 | `encodeWavPCM(L, R, sr, bits)` | 16/24-bit PCM or 32-bit float WAV. |
@@ -1554,6 +1639,35 @@ Compatibility notes:
   * Stop closes STUTTER's gate and returns PUMP to unity.
   * Bounces of the Filth Lab preset are finite and under the ceiling.
   * All earlier regression suites still pass.
+
+### 14.3b Song arranger release (scenes)
+
+* **Replaced** the per-bar clip arranger with scenes: a part matrix, knob capture,
+  automation lanes, sweeps, fills (roll / gap / stutter), loop-scene, vary, and
+  ✨ Make Song (club / flow, short / medium / long, seeded variations). Old clip
+  arrangements convert to scenes on load.
+* **Engine hooks:**
+  * SEQ `fire()` asks the scene model per step (pattern, gap, roll).
+  * `songAutomate` and `songFills` run in the live scheduler tick *and* in both
+    offline tick loops (bounce, DSP measurement), so rendered songs match playback.
+  * STUTTER exposes `m.engage(t, dur)`.
+  * `P.setValue` feeds capture.
+* **Verified:**
+  * **Make Song on Filth Lab:** roles are detected as bass/kick/snare/hat. The
+    rendered 72-bar song has a real energy arc: Intro −18.8 dB (dark) → Build −16.3 →
+    Drop −15.0 → Break −19.5 → Build 2 −19.9 → Drop 2 −14.4 (the peak) → Outro fading
+    −16 → −45 dB.
+  * **Gap and ending:** the drop gap is audible (−41 vs −19 dB), and there is silence
+    after the end.
+  * **Drums and Acid:** both get sensible structures.
+  * **Mouse UX:** select+jump, drag-reorder (+undo), edge resize, cell toggle and
+    paint, pattern chip, lane drawing, knob capture into the selected scene, loop
+    scene (exact bar range), and a full undo chain back to the loop.
+  * **Persistence:** share-link round trip (a 72-bar song = 1.4 KB link), save/load,
+    and legacy conversion all work. Bounce defaults to the song length. Songs stop at
+    their end.
+  * **Hostile song data:** clamped (including a `constructor` scene type).
+  * **Cost:** automation costs 0.008 ms per scheduler tick.
 
 ### 14.4 Known limitations and design notes
 
@@ -1797,6 +1911,11 @@ These are the next steps if racks need to grow much further:
 * **One AudioContext = one audio thread.** Browsers don't spread a single graph
   across cores. Beyond one core's worth of DSP, the answer is cheaper DSP (above),
   not more modules.
+* **Song automation** is applied at the scheduler tick (about every 20 ms, 20 ms
+  ahead), not as sample-accurate AudioParam ramps. That is inaudible for sweeps and
+  section changes, but very fast *cut* automation (e.g. a filter jump exactly on a
+  beat) can land up to a tick late. Pattern changes, gaps and rolls are
+  step-accurate.
 * **Visuals** run on the main thread with software-rendered canvases on some
   machines. An `OffscreenCanvas` in a worker would move them off the thread that
   generates events.
